@@ -1,0 +1,81 @@
+import re
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EA_PATH = ROOT / "MQL5" / "Experts" / "Alphatom_EA.mq5"
+
+
+class ExpertContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = EA_PATH.read_text(encoding="utf-8")
+
+    def test_ea_file_exists_and_is_mql5(self):
+        self.assertTrue(EA_PATH.is_file())
+        self.assertIn("#property", self.source)
+        self.assertIn("OnTick()", self.source)
+
+    def test_shadow_mode_defaults_to_true(self):
+        self.assertRegex(self.source, r"input\s+bool\s+InpShadowMode\s*=\s*true\s*;")
+
+    def test_kernels_are_included(self):
+        self.assertIn('<Alphatom/ExecKernel.mqh>', self.source)
+        self.assertIn('<Alphatom/MSNRLevels.mqh>', self.source)
+
+    def test_order_calls_are_guarded_by_the_live_gate(self):
+        # Every function that can send/modify/delete an order must first pass
+        # the live gate; shadow mode can never reach a trade call.
+        order_calls = re.findall(
+            r"\b(OrderSend|OrderSendAsync|OrderModify|OrderDelete)\s*\(", self.source
+        )
+        self.assertGreater(len(order_calls), 0, "expected a live execution path")
+        for match in re.finditer(r"^(?:[A-Za-z_][\w:<>\s\*&]*)\s+(\w+)\s*\([^;]*?\)\s*$",
+                                 self.source, re.MULTILINE):
+            pass
+        # Split into top-level functions by a conservative pattern.
+        functions = re.split(r"\n(?=[A-Za-z_][\w:<>\s\*&]*\s+\w+\s*\([^;]*\)\s*\n\s*\{)", self.source)
+        guarded = [f for f in functions if "EaLiveEnabled()" in f]
+        for function in functions:
+            if re.search(r"\b(OrderSend|OrderSendAsync|OrderModify|OrderDelete)\s*\(", function):
+                self.assertIn("EaLiveEnabled()", function,
+                              "order call outside the live gate")
+
+    def test_magic_is_configurable_and_used(self):
+        self.assertRegex(self.source, r"input\s+long\s+InpMagic\s*=")
+        self.assertIn("InpMagic", self.source)
+        self.assertRegex(self.source, r"magic\s*=\s*\(ulong\)InpMagic")
+
+    def test_init_never_trades(self):
+        init = self.source[self.source.index("int OnInit()"):]
+        init = init[: init.index("\n  }")]
+        self.assertNotRegex(init, r"\bOrder(Send|SendAsync|Modify|Delete)\b")
+
+    def test_only_closed_bars_are_used(self):
+        self.assertIn("ArraySetAsSeries(rates, false)", self.source)
+        self.assertRegex(self.source, r"copied\s*-\s*1")
+
+    def test_execution_timeframes_are_m1_m2_m3(self):
+        self.assertRegex(self.source, r"PERIOD_M1")
+        self.assertRegex(self.source, r"PERIOD_M2")
+        self.assertRegex(self.source, r"PERIOD_M3")
+        self.assertRegex(
+            self.source,
+            r"InpExecTimeframe\s*!=\s*PERIOD_M1\s*&&\s*InpExecTimeframe\s*!=\s*PERIOD_M2\s*&&\s*InpExecTimeframe\s*!=\s*PERIOD_M3",
+        )
+
+    def test_marketable_layers_are_executed_not_left_invalid(self):
+        # At arming the retest bar has closed; layers already past the market
+        # must become immediate fills instead of invalid pending limits.
+        self.assertIn("EaShadowArmFills", self.source)
+        self.assertIn("marketable", self.source)
+        self.assertRegex(self.source, r"request.action = TRADE_ACTION_DEAL;")
+        self.assertRegex(self.source, r"request.action = TRADE_ACTION_PENDING;")
+
+    def test_no_network_or_dll_calls(self):
+        self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
+
+
+if __name__ == "__main__":
+    unittest.main()
