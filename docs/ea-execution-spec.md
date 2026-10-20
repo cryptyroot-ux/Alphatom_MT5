@@ -13,14 +13,14 @@ All prices/timings use HFM Cent `XAUUSDc` MT5 semantics: 2 digits, point/tick si
 
 1. A wick on M1/M2/M3 enters a POI (swing level or gap band) → that is the **touch**.
 2. Only after the touch may a confirmation form; a confirmation that existed before the touch does not qualify. Mechanically: the confirmation bar index must be **strictly greater** than the touch bar index.
-3. Confirmation = **IFVG or CISD** aligned with the plan direction; just one is required.
+3. Confirmation = **IFVG or CISD** aligned with the plan direction; just one is required. The earliest valid confirmation bar wins; when both confirm on the **same bar**, IFVG takes priority (deterministic implementation rule, logged as `confirmKind`).
 4. Entry waits for the **retest**: trigger IFVG → retest must return to the IFVG zone used as confirmation; trigger CISD → retest must return to the CISD level/band used as confirmation. The retest bar index must be **strictly greater** than the confirmation bar index, so the breaking candle's own pre-close wick can never arm the orders.
 
 ## Round-1 frozen detections (user decisions 2026-10-21)
 
 - **IFVG:** confirmed on candle **close through** the opposite FVG zone boundary on M1/M2/M3 (body-close breach; wick alone never flips it intrabar). The inverted zone flips role and becomes the confirmation/retest zone. Direction map (guide §6.1): a **bearish FVG closed through upward** becomes a **bullish IFVG = support → buy** plan; a **bullish FVG closed through downward** becomes a **bearish IFVG = resistance → sell** plan.
 - **CISD:** anchor = the **open of the first candle of the latest delivery run**, and the trigger close must go against that run (guide §6.2). Direction map: a **bullish CISD** (buy) = a candle closes **above** the anchor of the latest **bearish** delivery run; a **bearish CISD** (sell) = a candle closes **below** the anchor of the latest **bullish** delivery run. The run definition and the minimum run length are inputs (`CISDMinRun`); the round-1 value `N=0` is superseded pending the audit decision D-2 (see `docs/ea-spec-audit.md` F-5: at N=0 a confirmation exists on ~48% of M1 bars).
-- **Entry zone:** trigger IFVG → the three layers are spread inside the **full IFVG zone**. Trigger CISD (a level) → zone = **3-bar M1 high/low band** around the CISD level, with configurable minimum/maximum width inputs.
+- **Entry zone:** trigger IFVG → the three layers are spread inside the **full IFVG zone**. Trigger CISD (a level) → zone = **3-bar M1 high/low band** around the CISD level, with configurable minimum/maximum width inputs. Mechanically the band is the high/low of the three M1 candles centered on the **anchor bar** (the bar whose open is the CISD anchor), forced to contain the level, then widened or narrowed symmetrically around it to satisfy the width inputs.
 - **Layer lifetime:** the three pending orders are placed when the entry zone is first touched; they remain active while their POI stays valid, and are canceled when the POI becomes Broken (round 2 narrows this: the round-1 "or the aligned signal reverses" clause is **superseded**).
 
 ## Order intent (carried from the agreed strategy; round 2 confirms order type)

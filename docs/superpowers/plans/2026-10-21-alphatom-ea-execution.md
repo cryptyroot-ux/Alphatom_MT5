@@ -77,14 +77,19 @@
 - Modify: `MQL5/Include/Alphatom/ExecKernel.mqh`
 - Modify: `tests/exec_kernel_tests.cpp`
 
-**Interfaces:**
-- `enum ExecPhase { EXEC_IDLE, EXEC_TOUCHED, EXEC_CONFIRMED, EXEC_ARMED, EXEC_MANAGING, EXEC_DONE, EXEC_CANCELED }`.
-- `struct ExecSetup { ExecPhase phase; MSNRRole role; double poiLower, poiUpper; long touchTime; long confirmTime; MSNRZone entryZone; double layers[3]; double sl; double tp[3]; bool filled[3]; bool slLocked; int poiSourceMinutes; }`.
-- `bool Exec_Advance(const MSNRBar execBars[], const int execCount, const MSNRBar poiBars[], const int poiCount, const MSNRRole poiRole, const double poiLower, const double poiUpper, const int cisdMinRun, ExecSetup &setup, ExecEvent &outEvent)` — one closed-bar step of the machine; emits `ExecEvent` records (touch / confirm / arm / cancel / skip) with the reason.
+**Interfaces (as built):**
+- `enum ExecPhase { EXEC_IDLE, EXEC_TOUCHED, EXEC_CONFIRMED, EXEC_ARMED, EXEC_MANAGING, EXEC_DONE, EXEC_CANCELED }`, `enum ExecEventType { NONE, TOUCH, CONFIRM, ARM, SKIP, CANCEL, FILL, TP1_LOCK, CLOSE, DONE }`, `enum ExecReason { NONE, POI_BROKEN, ROLE_FLIP, ZONE_INVALID, SL_INVALID, RISK_CAP, TP1, CONFIG }`, `enum ExecLayerState { NONE, PENDING, FILLED, CANCELED, CLOSED }`.
+- `struct ExecConfig` mirrors the expert inputs (tick, SL buffer/cap, CISD run and band width, min zone ticks, lots, money-per-pip, risk cap, TP pips 30/50/100, SL+ pips 10).
+- `struct ExecSetup` holds phase, POI role/bounds/source minutes, touch/confirm indices+times, confirm kind, entry zone, layers, initial/current stops, TPs, SL+ levels, fill prices, layer states, basket risk and skip reason.
+- `struct ExecEvent` reports type, resulting phase, bar index, time, layer, price and reason.
+- `bool Exec_InitSetup(...)` clears and arms a direction; it refuses to re-initialise an active setup, so the expert keeps at most one setup per direction. `bool Exec_IsActive(...)`.
+- `bool Exec_Advance(execBars, execCount, poiState, poiRole, config, setup, event)` — one closed-bar step; TOUCH on a fresh/flipped-fresh POI, CONFIRM after the touch (earliest valid IFVG/CISD; same-bar tie → IFVG), ARM on the first retest strictly after the confirmation (layers, D-1 window stop, clamp, skip guards, basket risk), and POI break/role flip cancels pending layers only.
+- `bool Exec_RecordFill(setup, layer, price, config, event)` re-derives that layer's TP and SL+ from the actual fill. `bool Exec_RecordClose(setup, layer, isTp, event)` implements the TP1 lock (E2/E3 → own +10 pips, pending killed) and DONE detection.
 
-- [ ] Add groups `test_touch_starts_setup_only_on_fresh_poi`, `test_confirmation_before_touch_is_ignored`, `test_retest_must_be_after_confirmation_bar`, `test_arm_places_three_layers`, `test_cancel_on_broken_poi_removes_unfilled_only`, `test_cancel_on_role_flip`, `test_tp1_lock_cancels_unfilled_and_sets_sl_plus`, `test_one_active_setup_per_direction`.
-- [ ] Run `make test`; expected: **RED**.
-- [ ] Implement the machine; expected: **GREEN**.
+- [x] Add groups `test_touch_starts_setup_only_on_fresh_poi`, `test_confirmation_before_touch_is_ignored`, `test_retest_must_be_after_confirmation_bar`, `test_arm_places_three_layers`, `test_cancel_on_broken_poi_removes_unfilled_only`, `test_cancel_on_role_flip`, `test_tp1_lock_cancels_unfilled_and_sets_sl_plus`, `test_one_active_setup_per_direction`, plus `test_confirmation_tie_prefers_ifvg`, `test_arm_skips_when_stop_not_beyond_far_entry`, `test_arm_skips_when_basket_risk_exceeds_cap`.
+- [x] Run `make test`; expected: **RED**. *(Observed: `ExecConfig`/`ExecSetup`/`ExecEvent` unknown, all machine calls unresolved.)*
+- [x] Implement the machine; expected: **GREEN**. *(Observed: 33 Exec groups + 15 MSNR + 14 Python. First run exposed a harness mistake — tests passed a short `count` with the full vector, while the kernel contract is `count == size`; fixed with a `head()` helper that simulates bar-by-bar steps. The synthetic series also formed a tiny IFVG on the same bar as the CISD, which made the tie-break visible; the series was cleaned for the CISD tests and a dedicated tie test keeps the rule pinned.)*
+- [x] MetaEditor compile of the kernel (**0 errors / 0 warnings**); it caught a local reference variable (`const MSNRBar &current = ...`) that MQL5 rejects and C++ accepts — replaced with a struct copy.
 
 ### Task 4: Shared POI level computation (no behavior change)
 

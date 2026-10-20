@@ -386,6 +386,341 @@ static void test_basket_risk_uses_all_three_distances() {
   CHECK(near(Exec_ComputeBasketRisk(-1.0, 10.0, 10.0, 0.15, 10.0), 0.0));
 }
 
+// --- Task 3: setup state machine ------------------------------------------
+
+// The kernel expects count == size; a closed-bar step therefore sees only the
+// bars that existed at that moment.
+static std::vector<MSNRBar> head(const std::vector<MSNRBar> &bars, int count) {
+  return std::vector<MSNRBar>(bars.begin(), bars.begin() + count);
+}
+
+static bool advance(const std::vector<MSNRBar> &bars, int count,
+                    MSNRState state, MSNRRole role, const ExecConfig &cfg,
+                    ExecSetup &setup, ExecEvent &ev) {
+  return Exec_Advance(head(bars, count), count, state, role, cfg, setup, ev);
+}
+
+static ExecConfig makeConfig() {
+  ExecConfig cfg{};
+  cfg.tickSize = 0.01;
+  cfg.slBufferTicks = 2;
+  cfg.slCapDistance = 5.00;
+  cfg.cisdMinRun = 2;
+  cfg.cisdMinWidth = 0.20;
+  cfg.cisdMaxWidth = 6.00;
+  cfg.minZoneWidthTicks = 2;
+  cfg.lotsPerLayer = 0.15;
+  cfg.moneyPerPipPerLot = 10.0;
+  cfg.riskCap = 0.0;
+  cfg.tpPips[0] = 30;
+  cfg.tpPips[1] = 50;
+  cfg.tpPips[2] = 100;
+  cfg.slPlusPips = 10;
+  return cfg;
+}
+
+// Synthetic bullish sequence: bar 0 wicks into the 4119-4120 support POI,
+// bars 1-2 are green, bars 3-4 are a red run (anchor 4121.00), bar 5 closes
+// above the anchor (bullish CISD -> band [4117.20, 4121.90]) and bar 6 is the
+// retest that reaches E1 4121.90.
+static std::vector<MSNRBar> buySeries() {
+  return {
+      bar(4121.50, 4122.00, 4119.50, 4121.00),  // 0 touch
+      bar(4121.00, 4121.80, 4120.60, 4121.40),  // 1
+      bar(4121.00, 4121.90, 4120.30, 4121.40),  // 2
+      bar(4121.00, 4121.10, 4119.70, 4119.90),  // 3 anchor bar
+      bar(4119.90, 4120.40, 4117.20, 4119.60),  // 4 run 2
+      bar(4119.60, 4122.00, 4119.50, 4121.80),  // 5 CISD confirm
+      bar(4121.80, 4122.20, 4120.00, 4120.50)   // 6 retest
+  };
+}
+
+// Same sequence but bar 4 keeps the tiny bearish gap [4120.20, 4120.30], so
+// an IFVG and a CISD both confirm on bar 5: the frozen tie-break picks IFVG.
+static std::vector<MSNRBar> tieSeries() {
+  std::vector<MSNRBar> bars = buySeries();
+  bars[4].high = 4120.20;
+  return bars;
+}
+
+// Bars 0-5 of buySeries with a much higher bar-2 high, so the CISD band is
+// 6.80 wide and the 50-pip clamp lands above the far entry.
+static std::vector<MSNRBar> wideSeries() {
+  return {
+      bar(4121.50, 4122.00, 4119.50, 4121.00),
+      bar(4121.00, 4121.80, 4120.60, 4121.40),
+      bar(4121.00, 4124.00, 4120.30, 4121.40),
+      bar(4121.00, 4121.10, 4119.70, 4119.90),
+      bar(4119.90, 4120.40, 4117.20, 4119.60),
+      bar(4119.60, 4123.00, 4119.50, 4121.80),
+      bar(4122.50, 4123.50, 4123.00, 4123.20)};
+}
+
+static void driveBuyToConfirmed(const std::vector<MSNRBar> &bars,
+                                const ExecConfig &cfg, ExecSetup &setup,
+                                ExecEvent &ev) {
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg,
+                     setup, ev));
+  CHECK(ev.type == EXEC_EVENT_TOUCH);
+  CHECK(advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg,
+                     setup, ev));
+  CHECK(ev.type == EXEC_EVENT_CONFIRM);
+}
+
+static void driveBuyToArmed(const std::vector<MSNRBar> &bars,
+                            const ExecConfig &cfg, ExecSetup &setup,
+                            ExecEvent &ev) {
+  driveBuyToConfirmed(bars, cfg, setup, ev);
+  CHECK(advance(bars, 7, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg,
+                     setup, ev));
+  CHECK(ev.type == EXEC_EVENT_ARM);
+}
+
+static void test_touch_starts_setup_only_on_fresh_poi() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+
+  CHECK(!Exec_InitSetup(setup, false, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(!advance(bars, 1, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg,
+                      setup, ev));
+  CHECK(setup.phase == EXEC_IDLE);
+  CHECK(!advance(bars, 1, MSNR_STATE_BROKEN, MSNR_ROLE_SUPPORT, cfg,
+                      setup, ev));
+  CHECK(setup.phase == EXEC_IDLE);
+  CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(ev.type == EXEC_EVENT_TOUCH);
+  CHECK(setup.phase == EXEC_TOUCHED);
+  CHECK(setup.touchIndex == 0);
+
+  // A flipped-fresh level may start a setup too.
+  ExecSetup flipped{};
+  ExecEvent flippedEvent{};
+  CHECK(Exec_InitSetup(flipped, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(advance(bars, 1, MSNR_STATE_FLIPPED_FRESH, MSNR_ROLE_SUPPORT, cfg,
+                     flipped, flippedEvent));
+  CHECK(flippedEvent.type == EXEC_EVENT_TOUCH);
+}
+
+static void test_confirmation_before_touch_is_ignored() {
+  const ExecConfig cfg = makeConfig();
+  // A bullish CISD fires at index 2; the POI is only touched at index 5.
+  const std::vector<MSNRBar> bars{
+      bar(4121.00, 4121.10, 4119.70, 4119.90),
+      bar(4119.90, 4120.20, 4118.00, 4119.80),
+      bar(4119.80, 4121.50, 4119.70, 4121.40),
+      bar(4121.40, 4121.90, 4120.30, 4121.00),
+      bar(4121.00, 4121.80, 4120.80, 4121.40),
+      bar(4121.40, 4122.00, 4119.50, 4121.00)};
+  ExecSetup setup{};
+  ExecEvent ev{};
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(advance(bars, 6, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(ev.type == EXEC_EVENT_TOUCH);
+  CHECK(setup.touchIndex == 5);
+  CHECK(!advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg,
+                      setup, ev));
+  CHECK(setup.phase == EXEC_TOUCHED);
+}
+
+static void test_retest_must_be_after_confirmation_bar() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToConfirmed(bars, cfg, setup, ev);
+
+  // Bar 5 also wicks into E1 (low 4119.50 <= 4121.90), but the confirmation
+  // bar itself must never arm the basket.
+  CHECK(ev.barIndex == 5);
+  CHECK(setup.phase == EXEC_CONFIRMED);
+  CHECK(near(setup.entryZone.lower, 4117.20));
+  CHECK(near(setup.entryZone.upper, 4121.90));
+  CHECK(setup.layerState[0] == EXEC_LAYER_NONE);
+}
+
+static void test_confirmation_tie_prefers_ifvg() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = tieSeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToConfirmed(bars, cfg, setup, ev);
+  CHECK(setup.confirmKind == EXEC_CONFIRM_IFVG);
+  CHECK(ev.barIndex == 5);
+  CHECK(near(setup.entryZone.lower, 4120.20));
+  CHECK(near(setup.entryZone.upper, 4120.30));
+}
+
+static void test_arm_places_three_layers() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  CHECK(setup.phase == EXEC_ARMED);
+  CHECK(setup.confirmKind == EXEC_CONFIRM_CISD);
+  CHECK(near(setup.layers[0], 4121.90));
+  CHECK(near(setup.layers[1], 4119.55));
+  CHECK(near(setup.layers[2], 4117.20));
+  CHECK(near(setup.initialSL, 4117.18));
+  CHECK(near(setup.tp[0], 4124.90));
+  CHECK(near(setup.tp[1], 4124.55));
+  CHECK(near(setup.tp[2], 4127.20));
+  CHECK(near(setup.slPlus[0], 4122.90));
+  CHECK(near(setup.slPlus[1], 4120.55));
+  CHECK(near(setup.slPlus[2], 4118.20));
+  CHECK(near(setup.basketRisk, 106.65));  // 71.1 pips * 0.15 * 10 USC
+  for (int i = 0; i < 3; ++i) {
+    CHECK(setup.layerState[i] == EXEC_LAYER_PENDING);
+    CHECK(near(setup.stops[i], 4117.18));
+  }
+}
+
+static void test_cancel_on_broken_poi_removes_unfilled_only() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  CHECK(Exec_RecordFill(setup, 0, 4121.90, cfg, ev));
+  CHECK(ev.type == EXEC_EVENT_FILL);
+  CHECK(setup.phase == EXEC_MANAGING);
+
+  CHECK(advance(bars, 7, MSNR_STATE_BROKEN, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(ev.reason == EXEC_REASON_POI_BROKEN);
+  CHECK(setup.layerState[0] == EXEC_LAYER_FILLED);
+  CHECK(setup.layerState[1] == EXEC_LAYER_CANCELED);
+  CHECK(setup.layerState[2] == EXEC_LAYER_CANCELED);
+  CHECK(setup.phase == EXEC_MANAGING);  // the filled layer keeps running
+  CHECK(Exec_IsActive(setup));
+
+  // A second advance with the same broken POI must not repeat the event.
+  CHECK(!advance(bars, 7, MSNR_STATE_BROKEN, MSNR_ROLE_SUPPORT, cfg,
+                      setup, ev));
+}
+
+static void test_cancel_on_role_flip() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  CHECK(advance(bars, 7, MSNR_STATE_FLIPPED_FRESH, MSNR_ROLE_RESISTANCE,
+                     cfg, setup, ev));
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(ev.reason == EXEC_REASON_ROLE_FLIP);
+  CHECK(setup.phase == EXEC_CANCELED);
+  CHECK(setup.layerState[0] == EXEC_LAYER_CANCELED);
+}
+
+static void test_tp1_lock_cancels_unfilled_and_sets_sl_plus() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+
+  // Only E1 filled: TP1 cancels the two pending layers and finishes.
+  ExecSetup partial{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, partial, ev);
+  CHECK(Exec_RecordFill(partial, 0, 4121.90, cfg, ev));
+  CHECK(Exec_RecordClose(partial, 0, true, ev));
+  CHECK(ev.type == EXEC_EVENT_TP1_LOCK);
+  CHECK(partial.slLocked);
+  CHECK(partial.layerState[0] == EXEC_LAYER_CLOSED);
+  CHECK(partial.layerState[1] == EXEC_LAYER_CANCELED);
+  CHECK(partial.layerState[2] == EXEC_LAYER_CANCELED);
+  CHECK(partial.phase == EXEC_DONE);
+  CHECK(!Exec_IsActive(partial));
+
+  // All three filled: TP1 keeps E2/E3 alive with their own +10 pip stop.
+  ExecSetup full{};
+  driveBuyToArmed(bars, cfg, full, ev);
+  CHECK(Exec_RecordFill(full, 0, 4121.90, cfg, ev));
+  CHECK(Exec_RecordFill(full, 1, 4119.55, cfg, ev));
+  CHECK(Exec_RecordFill(full, 2, 4117.20, cfg, ev));
+  CHECK(Exec_RecordClose(full, 0, true, ev));
+  CHECK(ev.type == EXEC_EVENT_TP1_LOCK);
+  CHECK(full.slLocked);
+  CHECK(full.phase == EXEC_MANAGING);
+  CHECK(near(full.stops[1], 4120.55));
+  CHECK(near(full.stops[2], 4118.20));
+
+  CHECK(Exec_RecordClose(full, 1, false, ev));
+  CHECK(ev.type == EXEC_EVENT_CLOSE);
+  CHECK(Exec_RecordClose(full, 2, true, ev));
+  CHECK(ev.type == EXEC_EVENT_DONE);
+  CHECK(full.phase == EXEC_DONE);
+}
+
+static void test_one_active_setup_per_direction() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(!Exec_IsActive(setup));
+  CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(Exec_IsActive(setup));  // TOUCHED blocks a second buy setup
+
+  // The predicate is the guard the expert uses per direction: a second buy is
+  // refused while the first is active, a sell slot stays free.
+  CHECK(!Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  ExecSetup sell{};
+  CHECK(Exec_InitSetup(sell, false, MSNR_ROLE_RESISTANCE, 4120.0, 4121.0, 15));
+  CHECK(!Exec_IsActive(sell));
+}
+
+static void test_arm_skips_when_stop_not_beyond_far_entry() {
+  ExecConfig wideCfg = makeConfig();
+  wideCfg.cisdMaxWidth = 8.00;  // keep the natural 6.80 band
+  const std::vector<MSNRBar> bars = wideSeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, wideCfg,
+                     setup, ev));
+  CHECK(advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, wideCfg,
+                     setup, ev));
+  CHECK(ev.type == EXEC_EVENT_CONFIRM);
+  CHECK(near(setup.entryZone.upper, 4124.00));
+  CHECK(advance(bars, 7, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, wideCfg,
+                     setup, ev));
+  CHECK(ev.type == EXEC_EVENT_SKIP);
+  CHECK(ev.reason == EXEC_REASON_SL_INVALID);
+  CHECK(setup.phase == EXEC_CANCELED);
+  CHECK(setup.layerState[0] == EXEC_LAYER_NONE);
+}
+
+static void test_arm_skips_when_basket_risk_exceeds_cap() {
+  ExecConfig cfg = makeConfig();
+  cfg.riskCap = 100.0;  // computed basket risk is 106.65 USC
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(advance(bars, 7, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(ev.type == EXEC_EVENT_SKIP);
+  CHECK(ev.reason == EXEC_REASON_RISK_CAP);
+  CHECK(setup.phase == EXEC_CANCELED);
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -409,11 +744,22 @@ int main() {
   test_tp_and_slplus_use_own_fill_price();
   test_guide_numeric_examples();
   test_basket_risk_uses_all_three_distances();
+  test_touch_starts_setup_only_on_fresh_poi();
+  test_confirmation_before_touch_is_ignored();
+  test_retest_must_be_after_confirmation_bar();
+  test_confirmation_tie_prefers_ifvg();
+  test_arm_places_three_layers();
+  test_cancel_on_broken_poi_removes_unfilled_only();
+  test_cancel_on_role_flip();
+  test_tp1_lock_cancels_unfilled_and_sets_sl_plus();
+  test_one_active_setup_per_direction();
+  test_arm_skips_when_stop_not_beyond_far_entry();
+  test_arm_skips_when_basket_risk_exceeds_cap();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("22 Exec kernel test groups passed\n");
+  std::printf("33 Exec kernel test groups passed\n");
   return 0;
 }
