@@ -3,16 +3,24 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -Werror -pedantic
 BUILD_DIR := build
 KERNEL_TEST := $(BUILD_DIR)/msnr_kernel_tests
 EXEC_TEST := $(BUILD_DIR)/exec_kernel_tests
+LEVEL_TEST := $(BUILD_DIR)/level_replay_tests
 
-.PHONY: test test-kernel test-exec test-python clean
+.PHONY: test test-kernel test-exec test-levels test-python clean
 
-test: test-kernel test-exec test-python
+test: test-kernel test-exec test-levels test-python
 
 test-kernel: $(KERNEL_TEST)
 	./$(KERNEL_TEST)
 
 test-exec: $(EXEC_TEST)
 	./$(EXEC_TEST)
+
+test-levels: $(LEVEL_TEST)
+	./$(LEVEL_TEST)
+
+$(LEVEL_TEST): tests/level_replay_tests.cpp MQL5/Include/Alphatom/MSNRLevels.mqh MQL5/Include/Alphatom/MSNRKernel.mqh tests/golden/hfm_bars_20261021.csv tests/golden/hfm_objects_20261021.csv
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ tests/level_replay_tests.cpp
 
 $(KERNEL_TEST): tests/msnr_kernel_tests.cpp MQL5/Include/Alphatom/MSNRKernel.mqh
 	mkdir -p $(BUILD_DIR)

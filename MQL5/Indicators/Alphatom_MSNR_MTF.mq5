@@ -5,7 +5,7 @@
 #property indicator_buffers 0
 #property indicator_plots   0
 
-#include "..\Include\Alphatom\MSNRKernel.mqh"
+#include "..\Include\Alphatom\MSNRLevels.mqh"
 
 input string     InpInstanceTag             = "A";
 input MSNRSource InpLevelSource             = MSNR_SOURCE_OPEN;
@@ -190,65 +190,24 @@ bool ValidInputs()
    return true;
   }
 
-void AddCandidate(MSNRLevel &levels[],
-                  int &levelCount,
-                  const MSNRLevel &candidate,
-                  const double mergeTolerance)
+void BuildParams(MSNRParams &params)
   {
-   if(!MSNR_IsVisibleState(candidate.state, InpKeepUnfresh, InpShowBroken))
-      return;
-   for(int i = 0; i < levelCount; ++i)
-     {
-      if(MSNR_ZoneDistance(levels[i], candidate) > mergeTolerance)
-         continue;
-      if(MSNR_ShouldReplaceWithFresh(levels[i].state, candidate.state,
-                                     InpFreshReplacesUnfresh))
-         levels[i] = candidate;
-      return;
-     }
-
-   if(!MSNR_CanRetainCandidate(levelCount, InpMaxLevelsPerTF))
-      return;
-   if(ArrayResize(levels, levelCount + 1) != levelCount + 1)
-      return;
-   levels[levelCount] = candidate;
-   ++levelCount;
-  }
-
-void StoreCandidate(MSNRLevel &candidates[],
-                    int &candidateCount,
-                    const MSNRLevel &candidate)
-  {
-   if(candidateCount >= ArraySize(candidates))
-      return;
-   candidates[candidateCount] = candidate;
-   ++candidateCount;
-  }
-
-void InitializeCandidate(MSNRLevel &candidate,
-                         const double lower,
-                         const double upper,
-                         const MSNRRole role,
-                         const long created,
-                         const bool isGap,
-                         const bool isSwingHigh,
-                         const MSNRBar &bars[],
-                         const int count,
-                         const int firstLifecycleBar)
-  {
-   candidate.lower = lower;
-   candidate.upper = upper;
-   candidate.price = (lower + upper) * 0.5;
-   candidate.role = role;
-   candidate.state = MSNR_STATE_FRESH;
-   candidate.created = created;
-   candidate.isGap = isGap;
-   candidate.isSwingHigh = isSwingHigh;
-
-   const double touchTolerance = InpTouchTolerancePoints * _Point;
-   for(int i = firstLifecycleBar; i < count; ++i)
-      MSNR_ApplyClosedBar(candidate, bars[i], touchTolerance, 0.0,
-                          InpFlipBroken);
+   MSNR_InitParams(params);
+   params.swingLeft = InpSwingLeft;
+   params.swingRight = InpSwingRight;
+   params.gapDetection = InpGapDetection;
+   params.gapToleranceTicks = InpGapToleranceTicks;
+   params.touchTolerancePoints = InpTouchTolerancePoints;
+   params.point = _Point;
+   params.atrPeriod = InpATRPeriod;
+   params.mergeToleranceATR = InpMergeToleranceATR;
+   params.freshReplacesUnfresh = InpFreshReplacesUnfresh;
+   params.keepUnfresh = InpKeepUnfresh;
+   params.flipBroken = InpFlipBroken;
+   params.showBroken = InpShowBroken;
+   params.maxLevelsPerTF = InpMaxLevelsPerTF;
+   params.levelSource = InpLevelSource;
+   params.tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
   }
 
 void ProcessTimeframe(const ENUM_TIMEFRAMES timeframe,
@@ -288,99 +247,18 @@ void ProcessTimeframe(const ENUM_TIMEFRAMES timeframe,
       bars[i].low = rates[i].low;
       bars[i].close = rates[i].close;
       bars[i].time = (long)rates[i].time;
-      if(!MSNR_IsValidBar(bars[i]))
-        {
-         ArrayResize(outLevels, 0);
-         outCount = 0;
-         ClearTimeframeObjects(prefix);
-         return;
-        }
      }
 
-   const double atr = MSNR_CalculateATR(bars, closed_count, InpATRPeriod);
-   const double mergeTolerance = atr * InpMergeToleranceATR;
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   if(tickSize <= 0.0)
-      tickSize = _Point;
-   const double gapTolerance = InpGapToleranceTicks * tickSize;
-
-   MSNRLevel swingCandidates[];
-   MSNRLevel gapCandidates[];
-   if(ArrayResize(swingCandidates, closed_count * 2) != closed_count * 2 ||
-      ArrayResize(gapCandidates, closed_count - 2) != closed_count - 2)
+   MSNRParams params;
+   BuildParams(params);
+   if(!MSNR_BuildLevels(bars, closed_count, params, outLevels, outCount))
+     {
+      outCount = 0;
+      ArrayResize(outLevels, 0);
+      ClearTimeframeObjects(prefix);
       return;
-   int swingCount = 0;
-   int gapCount = 0;
-
-   const int newestSwing = closed_count - InpSwingRight - 1;
-   for(int index = newestSwing;
-       index >= InpSwingLeft;
-       --index)
-     {
-      if(MSNR_IsPivotHigh(bars, closed_count, index, InpSwingLeft,
-                          InpSwingRight, InpLevelSource))
-        {
-         const double price = MSNR_GetLevelPrice(bars[index], InpLevelSource);
-         MSNRLevel candidate;
-         InitializeCandidate(candidate, price, price, MSNR_ROLE_RESISTANCE,
-                             bars[index].time, false, true, bars, closed_count,
-                             index + 1);
-         StoreCandidate(swingCandidates, swingCount, candidate);
-        }
-      if(MSNR_IsPivotLow(bars, closed_count, index, InpSwingLeft,
-                         InpSwingRight, InpLevelSource))
-        {
-         const double price = MSNR_GetLevelPrice(bars[index], InpLevelSource);
-         MSNRLevel candidate;
-         InitializeCandidate(candidate, price, price, MSNR_ROLE_SUPPORT,
-                             bars[index].time, false, false, bars, closed_count,
-                             index + 1);
-         StoreCandidate(swingCandidates, swingCount, candidate);
-        }
      }
 
-   if(InpGapDetection)
-     {
-      for(int oldestIndex = closed_count - 3;
-          oldestIndex >= 0;
-          --oldestIndex)
-        {
-         const MSNRZone zone = MSNR_DetectGap(bars, closed_count, oldestIndex,
-                                              gapTolerance);
-         if(!zone.valid)
-            continue;
-         MSNRLevel candidate;
-         const MSNRRole role = zone.bullish ? MSNR_ROLE_SUPPORT :
-                                              MSNR_ROLE_RESISTANCE;
-         InitializeCandidate(candidate, zone.lower, zone.upper, role,
-                             bars[oldestIndex + 2].time, true, false, bars,
-                             closed_count, oldestIndex + 3);
-         StoreCandidate(gapCandidates, gapCount, candidate);
-        }
-     }
-
-   int swingIndex = 0;
-   int gapIndex = 0;
-   while((swingIndex < swingCount || gapIndex < gapCount) &&
-         MSNR_CanRetainCandidate(outCount, InpMaxLevelsPerTF))
-     {
-      bool takeSwing = gapIndex >= gapCount;
-      if(swingIndex < swingCount && gapIndex < gapCount)
-         takeSwing = MSNR_CandidatePrecedes(swingCandidates[swingIndex],
-                                            gapCandidates[gapIndex]);
-      if(takeSwing)
-        {
-         AddCandidate(outLevels, outCount, swingCandidates[swingIndex],
-                      mergeTolerance);
-         ++swingIndex;
-        }
-      else
-        {
-         AddCandidate(outLevels, outCount, gapCandidates[gapIndex],
-                      mergeTolerance);
-         ++gapIndex;
-        }
-     }
    RenderTimeframe(timeframe, outLevels, outCount);
   }
 

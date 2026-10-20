@@ -9,12 +9,20 @@ SOURCE_PATH = (
     / "Indicators"
     / "Alphatom_MSNR_MTF.mq5"
 )
+LEVELS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "MQL5"
+    / "Include"
+    / "Alphatom"
+    / "MSNRLevels.mqh"
+)
 
 
 class IndicatorContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
+        cls.levels = LEVELS_PATH.read_text(encoding="utf-8")
 
     def test_poi_period_list_is_exactly_m15_m30_h1(self):
         match = re.search(
@@ -69,35 +77,33 @@ class IndicatorContractTests(unittest.TestCase):
                 )
 
     def test_copied_bars_are_validated_before_level_calculation(self):
-        self.assertIn("MSNR_IsValidBar", self.source)
-        self.assertRegex(
-            self.source,
-            r"if\s*\(!MSNR_IsValidBar\(bars\[i\]\)\)\s*\{\s*"
-            r"ArrayResize\(outLevels,\s*0\);\s*outCount\s*=\s*0;\s*"
-            r"ClearTimeframeObjects\(prefix\);\s*return;",
+        # The pipeline lives in the shared include; the indicator delegates.
+        self.assertIn("MSNR_BuildLevels(", self.source)
+        self.assertIn("MSNR_IsValidBar", self.levels)
+        self.assertLess(
+            self.levels.index("MSNR_IsValidBar("),
+            self.levels.index("MSNR_CalculateATR("),
         )
 
     def test_hidden_candidates_are_filtered_before_the_level_cap(self):
-        start = self.source.index("void AddCandidate(")
-        end = self.source.index("\n  }", start)
-        body = self.source[start:end]
+        start = self.levels.index("void MSNR_AddCandidate(")
+        end = self.levels.index("\n  }", start)
+        body = self.levels[start:end]
         self.assertLess(
             body.index("MSNR_IsVisibleState("),
             body.index("MSNR_CanRetainCandidate("),
         )
 
     def test_swings_and_gaps_share_newest_first_level_cap(self):
-        start = self.source.index("void ProcessTimeframe(")
-        end = self.source.index("\nint OnInit()", start)
-        body = self.source[start:end]
-        self.assertIn("swingCandidates", body)
-        self.assertIn("gapCandidates", body)
-        self.assertIn("MSNR_CandidatePrecedes(", body)
-        self.assertLess(body.index("MSNR_DetectGap("),
-                        body.index("MSNR_CandidatePrecedes("))
-        self.assertLess(body.index("MSNR_IsPivotHigh("),
-                        body.index("MSNR_CandidatePrecedes("))
-        self.assertIn("AddCandidate(outLevels, outCount", body)
+        self.assertIn("MSNR_BuildLevels(", self.source)
+        self.assertIn("swingCandidates", self.levels)
+        self.assertIn("gapCandidates", self.levels)
+        self.assertIn("MSNR_CandidatePrecedes(", self.levels)
+        self.assertLess(self.levels.index("MSNR_DetectGap("),
+                        self.levels.index("MSNR_CandidatePrecedes("))
+        self.assertLess(self.levels.index("MSNR_IsPivotHigh("),
+                        self.levels.index("MSNR_CandidatePrecedes("))
+        self.assertIn("MSNR_AddCandidate(outLevels, outCount", self.levels)
 
     def test_indicator_does_not_call_trade_apis(self):
         self.assertNotRegex(

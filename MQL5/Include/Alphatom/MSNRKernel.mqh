@@ -3,14 +3,22 @@
 
 #ifdef __MQL5__
   #define MSNR_ARRAY_PARAMETER(type, name) const type &name[]
+  #define MSNR_ARRAY_OUTPUT(type, name) type &name[]
   #define MSNR_ARRAY_SIZE(name) ArraySize(name)
   #define MSNR_ARRAY_ELEMENT(name, index) name[index]
+  #define MSNR_DYNAMIC_ARRAY(type, name) type name[]
+  #define MSNR_ARRAY_RESIZE(name, size) ArrayResize(name, size)
+  #define MSNR_ARRAY_CLEAR(name) ArrayResize(name, 0)
 #else
   #include <cmath>
   #include <vector>
   #define MSNR_ARRAY_PARAMETER(type, name) const std::vector<type> &name
+  #define MSNR_ARRAY_OUTPUT(type, name) std::vector<type> &name
   #define MSNR_ARRAY_SIZE(name) static_cast<int>((name).size())
   #define MSNR_ARRAY_ELEMENT(name, index) (name)[index]
+  #define MSNR_DYNAMIC_ARRAY(type, name) std::vector<type> name
+  #define MSNR_ARRAY_RESIZE(name, size) (name).resize(size)
+  #define MSNR_ARRAY_CLEAR(name) (name).clear()
   #define MSNR_IS_FINITE_NUMBER(value) std::isfinite(value)
 #endif
 

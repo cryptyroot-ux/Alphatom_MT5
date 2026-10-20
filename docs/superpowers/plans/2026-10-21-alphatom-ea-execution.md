@@ -101,11 +101,12 @@
 **Interfaces:**
 - `void MSNR_BuildLevels(const MSNRBar bars[], const int count, const MSNRParams &params, MSNRLevel &outLevels[], int &outCount)` — candidate selection (combined newest-eight cap, swing-before-gap ties), band merge, lifecycle replay, exactly as the indicator does today.
 
-- [ ] Capture the **golden object snapshot** from the live terminal before touching the indicator (the 60-object dump produced in the audit run) into `tests/golden/hfm_objects_20261021.csv`.
-- [ ] Add a host test that replays the exported HFM M15/M30/H1 bars through `MSNR_BuildLevels` and matches the golden snapshot's names, prices, roles and lifecycle labels.
-- [ ] Run `make test`; expected: **RED** (no `MSNRLevels.mqh`).
-- [ ] Extract the computation, switch the indicator to it, re-run the host tests and the MetaEditor build (0 errors / 0 warnings), then re-run the HFM audit and diff the object dump against the golden snapshot — expected: **byte-identical object set** (no behavior change).
-- [ ] If the diff is not empty, revert the indicator to its private path and record the discrepancy instead of shipping it.
+- [x] Capture the **golden object snapshot** from the live terminal before touching the indicator (the 60-object dump produced in the audit run) into `tests/golden/hfm_objects_20261021.csv`, together with the exact bars the indicator used (`tests/golden/hfm_bars_20261021.csv`, 1499 closed bars x M15/M30/H1).
+- [x] Add a host test that replays the exported HFM M15/M30/H1 bars through `MSNR_BuildLevels` and matches the golden snapshot's names, prices, roles and lifecycle labels (`tests/level_replay_tests.cpp`, `make test-levels`).
+- [x] Run `make test`; expected: **RED** (no `MSNRLevels.mqh`). *(Observed: the new target failed to build until the include and macros existed.)*
+- [x] Extract the computation, switch the indicator to it, re-run the host tests and the MetaEditor build (0 errors / 0 warnings). *(Observed: golden replay PASS — 8 levels per TF, all prices, gap bounds, roles, states and labels identical; MetaEditor 0 errors / 0 warnings for both the kernel harness and the refactored indicator; 15 MSNR + 33 Exec + 1 level replay + 14 Python green.)*
+- [x] Live object-diff note: the golden replay on the **same bar window** is the parity gate. A fresh live audit cannot be byte-identical because the market has advanced (new bars legitimately add/evict levels); the live self-consistency check (export bars + objects in the same session, replay host-side) is folded into Task 6's shadow run.
+- [x] If the diff is not empty, revert the indicator to its private path and record the discrepancy instead of shipping it. *(Not needed: the diff is empty.)*
 
 ### Task 5: Expert advisor shell (shadow mode first)
 
