@@ -57,16 +57,19 @@
 - Modify: `MQL5/Include/Alphatom/ExecKernel.mqh`
 - Modify: `tests/exec_kernel_tests.cpp`
 
-**Interfaces:**
-- `bool Exec_BuildEntryZone(const bool isCisd, const MSNRZone &ifvgZone, const double cisdAnchor, const MSNRBar m1Bars[], const int m1Count, const int cisdAnchorIndex, const double minWidth, const double maxWidth, MSNRZone &outZone)` — IFVG trigger → the full IFVG zone; CISD trigger → a 3-bar M1 high/low band around the anchor, clamped to `[minWidth, maxWidth]`.
-- `bool Exec_ComputeLayers(const MSNRZone &zone, const bool isBuy, const double firstTouchPrice, const double tickSize, const int minWidthTicks, double &e1, double &e2, double &e3)` — equal thirds: E1 at the first-touched edge, E2 at the midpoint, E3 at the far edge; all rounded to the tick grid and strictly ordered; `false` when the zone is too narrow or the rounding collapses a price.
+**Interfaces (as built):**
+- `bool Exec_BuildIfvgEntryZone(const MSNRZone &ifvgZone, MSNRZone &outZone)` — the full inverted gap, copied unchanged.
+- `bool Exec_BuildCisdEntryZone(const MSNRBar bars[], const int count, const int anchorIndex, const double anchorPrice, const double minWidth, const double maxWidth, MSNRZone &outZone)` — high/low band of the three M1 candles around the anchor bar (bar whose open is the CISD anchor), forced to contain the anchor, widened to `minWidth` or narrowed to `maxWidth` symmetrically around it.
+- `bool Exec_ComputeLayers(const MSNRZone &zone, const bool isBuy, const double tickSize, const int minWidthTicks, double &e1, double &e2, double &e3)` — equal thirds; E1 is the near edge by direction (upper for buy, lower for sell), E2 the midpoint, E3 the far edge; all rounded to the tick grid and strictly ordered; `false` when the zone is too narrow or rounding collapses a price. *(The `firstTouchPrice` parameter was dropped: direction + stacking fully determine the edge order, and the state machine validates which edge the arming wick touched.)*
 - `bool Exec_ComputeSharedSL(const bool isBuy, const double windowLow, const double windowHigh, const double e1, const double e3, const double tickSize, const int bufferTicks, const double capDistance, double &outSL, int &outSkipReason)` — extreme wick of the arming window ± buffer ticks → clamp to exactly `capDistance` from E1 → require the final SL beyond E3; otherwise return `false` with a skip reason.
 - `double Exec_ComputeTP(const bool isBuy, const double fillPrice, const int pips)`, `double Exec_ComputeSLPlus(const bool isBuy, const double entryPrice, const int pips)`.
+- `double Exec_ComputeBasketRisk(const double distancePips1, const double distancePips2, const double distancePips3, const double lotsPerLayer, const double moneyPerPipPerLot)` — guide §11.2 basket risk in deposit currency (USC on the cent account); `moneyPerPipPerLot` must be derived from SymbolInfo at runtime.
+- `Exec_DetectCISD` gained `int &outAnchorIndex` (index of the anchored run's first candle) so the CISD band can be built without re-deriving the anchor bar.
 
-- [ ] Add groups `test_entry_zone_for_cisd_uses_three_bar_band`, `test_entry_zone_for_ifvg_is_full_zone`, `test_layers_are_equal_thirds_and_ordered`, `test_layers_reject_too_narrow_zone`, `test_shared_sl_uses_window_extreme_not_last_candle`, `test_shared_sl_clamps_to_fifty_pips_from_e1`, `test_shared_sl_skips_when_not_beyond_far_entry`, `test_tp_and_slplus_use_own_fill_price`.
-- [ ] Run `make test`; expected: **RED** (functions absent).
-- [ ] Implement the functions; expected: **GREEN**.
-- [ ] Re-verify the guide's numeric examples as a test: buy E1 4120.0 / E2 4119.5 / E3 4119.0 with structural SL 4116.5 kept, structural SL 4114.0 clamped to 4115.0, SL+ E2 4120.5 / E3 4120.0; sell mirror (SL 4123.5 kept, 4126.0 → 4125.0, SL+ 4119.5 / 4120.0).
+- [x] Add groups `test_entry_zone_for_cisd_uses_three_bar_band`, `test_entry_zone_for_ifvg_is_full_zone`, `test_layers_are_equal_thirds_and_ordered`, `test_layers_reject_too_narrow_zone`, `test_shared_sl_uses_window_extreme_not_last_candle`, `test_shared_sl_clamps_to_fifty_pips_from_e1`, `test_shared_sl_skips_when_not_beyond_far_entry`, `test_tp_and_slplus_use_own_fill_price`, plus `test_guide_numeric_examples` and `test_basket_risk_uses_all_three_distances`.
+- [x] Run `make test`; expected: **RED** (functions absent). *(Observed: compile errors for every new symbol, as expected.)*
+- [x] Implement the functions; expected: **GREEN**. *(Observed: 22 Exec groups pass, 15 MSNR groups and 14 Python tests stay green. One failure during the first run was a wrong test value — sell structural wick `4123.52 + 2 ticks` is `4123.54`, not `4123.50`; the test was corrected to `4123.48`.)*
+- [x] Re-verify the guide's numeric examples as a test: buy E1 4120.0 / E2 4119.5 / E3 4119.0 with structural SL 4116.5 kept, structural SL 4114.0 clamped to 4115.0, SL+ E2 4120.5 / E3 4120.0; sell mirror (SL 4123.5 kept, 4126.0 → 4125.0, SL+ 4119.5 / 4120.0). *(Covered by `test_guide_numeric_examples`.)*
 
 ### Task 3: Execution kernel — setup state machine
 

@@ -30,7 +30,7 @@ static MSNRBar bar(double open, double high, double low, double close,
   return result;
 }
 
-// --- IFVG -----------------------------------------------------------------
+// --- Task 1: detection -----------------------------------------------------
 
 static void test_ifvg_requires_close_through_far_boundary() {
   // Bullish FVG at [101,105] (bars 0..2) then a close below 101 -> the gap
@@ -60,8 +60,8 @@ static void test_ifvg_ignores_wick_only_break() {
 }
 
 static void test_ifvg_mirrors_to_support_zone() {
-  // Bearish FVG at [91,99] broken upward by a close above 99 -> bullish
-  // (support) IFVG.
+  // Bearish FVG at [newest high, oldest low] = [95,99] broken upward -> a
+  // bullish (support) IFVG.
   std::vector<MSNRBar> bars{bar(100, 101, 99, 100), bar(96, 97, 95, 96),
                              bar(94, 95, 90, 91), bar(92, 105, 92, 104)};
   MSNRZone zone{};
@@ -70,8 +70,6 @@ static void test_ifvg_mirrors_to_support_zone() {
   CHECK(Exec_DetectIFVG(bars, static_cast<int>(bars.size()), -1,
                         MSNR_ROLE_SUPPORT, 0.0, 0.0, zone, index, time));
   CHECK(index == 3);
-  // Bearish gap bounds follow MSNR_DetectGap: lower = newest high (95),
-  // upper = oldest low (99).
   CHECK(near(zone.lower, 95.0));
   CHECK(near(zone.upper, 99.0));
 }
@@ -105,19 +103,19 @@ static void test_ifvg_uses_first_break_only() {
                          MSNR_ROLE_SUPPORT, 0.0, 0.0, zone, index, time));
 }
 
-// --- CISD -----------------------------------------------------------------
-
 static void test_cisd_anchor_is_first_candle_of_run() {
   // Two bullish candles (run), then a bearish candle closing below the
   // anchor (open of the first run candle) -> bearish CISD.
   std::vector<MSNRBar> bars{bar(100, 103, 99.5, 102), bar(102, 105, 101, 104),
                              bar(104, 104, 99.0, 99.5)};
   double anchor = 0.0;
+  int anchorIndex = -1;
   int index = -1;
   long time = 0;
   CHECK(Exec_DetectCISD(bars, static_cast<int>(bars.size()), -1, 2, false,
-                        anchor, index, time));
+                        anchor, anchorIndex, index, time));
   CHECK(index == 2);
+  CHECK(anchorIndex == 0);
   CHECK(near(anchor, 100.0));
 }
 
@@ -125,12 +123,13 @@ static void test_cisd_min_run_length_is_enforced() {
   // A single bullish candle is not a delivery run when minRun is 2.
   std::vector<MSNRBar> bars{bar(100, 103, 99.5, 102), bar(102, 102.5, 99.0, 99.5)};
   double anchor = 0.0;
+  int anchorIndex = -1;
   int index = -1;
   long time = 0;
   CHECK(!Exec_DetectCISD(bars, static_cast<int>(bars.size()), -1, 2, false,
-                         anchor, index, time));
+                         anchor, anchorIndex, index, time));
   CHECK(Exec_DetectCISD(bars, static_cast<int>(bars.size()), -1, 1, false,
-                        anchor, index, time));
+                        anchor, anchorIndex, index, time));
   CHECK(near(anchor, 100.0));
 }
 
@@ -142,10 +141,11 @@ static void test_cisd_doji_breaks_run() {
                                 bar(102, 104, 101, 103),
                                 bar(103, 103, 99.0, 99.5)};
   double anchor = 0.0;
+  int anchorIndex = -1;
   int index = -1;
   long time = 0;
   CHECK(Exec_DetectCISD(without, static_cast<int>(without.size()), -1, 2, false,
-                        anchor, index, time));
+                        anchor, anchorIndex, index, time));
   CHECK(near(anchor, 100.0));
 
   std::vector<MSNRBar> withDoji{bar(100, 103, 99.5, 102),
@@ -153,7 +153,7 @@ static void test_cisd_doji_breaks_run() {
                                  bar(102, 104, 101, 103),
                                  bar(103, 103, 99.0, 99.5)};
   CHECK(!Exec_DetectCISD(withDoji, static_cast<int>(withDoji.size()), -1, 2,
-                         false, anchor, index, time));
+                         false, anchor, anchorIndex, index, time));
 }
 
 static void test_cisd_direction_matches_opposing_run() {
@@ -162,30 +162,31 @@ static void test_cisd_direction_matches_opposing_run() {
   std::vector<MSNRBar> bars{bar(100, 100.5, 97, 98), bar(98, 98.5, 95, 96),
                              bar(96, 104, 96, 103)};
   double anchor = 0.0;
+  int anchorIndex = -1;
   int index = -1;
   long time = 0;
   CHECK(Exec_DetectCISD(bars, static_cast<int>(bars.size()), -1, 2, true,
-                        anchor, index, time));
+                        anchor, anchorIndex, index, time));
   CHECK(index == 2);
+  CHECK(anchorIndex == 0);
   CHECK(near(anchor, 100.0));
   // The same bars must not produce a bearish CISD.
   CHECK(!Exec_DetectCISD(bars, static_cast<int>(bars.size()), -1, 2, false,
-                         anchor, index, time));
+                         anchor, anchorIndex, index, time));
 }
 
 static void test_cisd_respects_after_index() {
   std::vector<MSNRBar> bars{bar(100, 103, 99.5, 102), bar(102, 105, 101, 104),
                              bar(104, 104, 99.0, 99.5)};
   double anchor = 0.0;
+  int anchorIndex = -1;
   int index = -1;
   long time = 0;
   CHECK(!Exec_DetectCISD(bars, static_cast<int>(bars.size()), 2, 2, false,
-                         anchor, index, time));
+                         anchor, anchorIndex, index, time));
   CHECK(Exec_DetectCISD(bars, static_cast<int>(bars.size()), 1, 2, false,
-                        anchor, index, time));
+                        anchor, anchorIndex, index, time));
 }
-
-// --- touch chain ----------------------------------------------------------
 
 static void test_touch_chain_spans_repeated_wicks() {
   std::vector<MSNRBar> bars{bar(100, 100.5, 99.5, 100), bar(100, 100.6, 99.4, 100),
@@ -206,6 +207,185 @@ static void test_touch_chain_reports_no_touch() {
                              0.0, first, last));
 }
 
+// --- Task 2: entry zone, layers, SL, TP, risk ------------------------------
+
+static void test_entry_zone_for_ifvg_is_full_zone() {
+  MSNRZone gap{};
+  gap.valid = true;
+  gap.bullish = true;
+  gap.lower = 4119.0;
+  gap.upper = 4121.5;
+  MSNRZone out{};
+  CHECK(Exec_BuildIfvgEntryZone(gap, out));
+  CHECK(out.valid);
+  CHECK(out.bullish);
+  CHECK(near(out.lower, 4119.0));
+  CHECK(near(out.upper, 4121.5));
+
+  MSNRZone invalid{};
+  CHECK(!Exec_BuildIfvgEntryZone(invalid, out));
+  CHECK(!out.valid);
+}
+
+static void test_entry_zone_for_cisd_uses_three_bar_band() {
+  // Anchor bar = index 2 (open 100.00); the band covers bars 1..3 and must
+  // contain the level.
+  std::vector<MSNRBar> bars{bar(99.0, 99.5, 98.5, 99.0),
+                             bar(99.5, 100.4, 99.5, 100.0),
+                             bar(100.0, 100.6, 99.8, 100.2),
+                             bar(100.2, 100.5, 99.6, 100.1),
+                             bar(100.1, 100.3, 99.9, 100.0)};
+  MSNRZone band{};
+  CHECK(Exec_BuildCisdEntryZone(bars, static_cast<int>(bars.size()), 2, 100.0,
+                                0.20, 2.00, band));
+  CHECK(near(band.lower, 99.5));
+  CHECK(near(band.upper, 100.6));
+
+  // A range narrower than the minimum expands symmetrically around the level.
+  std::vector<MSNRBar> narrow{bar(100, 100.02, 99.98, 100.0),
+                               bar(100, 100.03, 99.99, 100.0),
+                               bar(100, 100.02, 99.98, 100.0)};
+  CHECK(Exec_BuildCisdEntryZone(narrow, static_cast<int>(narrow.size()), 1,
+                                100.0, 0.20, 2.00, band));
+  CHECK(near(band.lower, 99.90));
+  CHECK(near(band.upper, 100.10));
+
+  // A range wider than the maximum shrinks symmetrically around the level.
+  std::vector<MSNRBar> wide{bar(100, 102.5, 97.5, 100.0),
+                             bar(100, 102.0, 98.0, 100.0),
+                             bar(100, 101.5, 98.5, 100.0)};
+  CHECK(Exec_BuildCisdEntryZone(wide, static_cast<int>(wide.size()), 1, 100.0,
+                                0.20, 2.00, band));
+  CHECK(near(band.lower, 99.00));
+  CHECK(near(band.upper, 101.00));
+}
+
+static void test_layers_are_equal_thirds_and_ordered() {
+  MSNRZone zone{};
+  zone.valid = true;
+  zone.lower = 4119.0;
+  zone.upper = 4120.0;
+  double e1 = 0.0, e2 = 0.0, e3 = 0.0;
+
+  CHECK(Exec_ComputeLayers(zone, true, 0.01, 2, e1, e2, e3));
+  CHECK(near(e1, 4120.00));
+  CHECK(near(e2, 4119.50));
+  CHECK(near(e3, 4119.00));
+
+  CHECK(Exec_ComputeLayers(zone, false, 0.01, 2, e1, e2, e3));
+  CHECK(near(e1, 4119.00));
+  CHECK(near(e2, 4119.50));
+  CHECK(near(e3, 4120.00));
+}
+
+static void test_layers_reject_too_narrow_zone() {
+  MSNRZone thin{};
+  thin.valid = true;
+  thin.lower = 4119.99;
+  thin.upper = 4120.00;
+  double e1 = 0.0, e2 = 0.0, e3 = 0.0;
+  CHECK(!Exec_ComputeLayers(thin, true, 0.01, 2, e1, e2, e3));
+
+  MSNRZone minimal{};
+  minimal.valid = true;
+  minimal.lower = 4119.98;
+  minimal.upper = 4120.00;
+  CHECK(Exec_ComputeLayers(minimal, true, 0.01, 2, e1, e2, e3));
+  CHECK(near(e1, 4120.00));
+  CHECK(near(e2, 4119.99));
+  CHECK(near(e3, 4119.98));
+}
+
+static void test_shared_sl_uses_window_extreme_not_last_candle() {
+  double sl = 0.0;
+  int reason = 0;
+  // The deepest wick of the window is 4115.02 even though the last touch only
+  // reached 4118.00; the stop must follow the window extreme.
+  CHECK(Exec_ComputeSharedSL(true, 4115.02, 4125.0, 4120.0, 4119.0, 0.01, 2,
+                             5.00, sl, reason));
+  CHECK(near(sl, 4115.00));
+}
+
+static void test_shared_sl_clamps_to_fifty_pips_from_e1() {
+  double sl = 0.0;
+  int reason = 0;
+  CHECK(Exec_ComputeSharedSL(true, 4114.02, 4125.0, 4120.0, 4119.0, 0.01, 2,
+                             5.00, sl, reason));
+  CHECK(near(sl, 4115.00));
+  CHECK(reason == 0);
+
+  CHECK(Exec_ComputeSharedSL(false, 4110.0, 4126.02, 4120.0, 4121.0, 0.01, 2,
+                             5.00, sl, reason));
+  CHECK(near(sl, 4125.00));
+}
+
+static void test_shared_sl_skips_when_not_beyond_far_entry() {
+  double sl = 0.0;
+  int reason = 0;
+  // The retest window never dipped below 4119.50 -> the stop would sit above
+  // the far entry (4119.00), which the broker would reject.
+  CHECK(!Exec_ComputeSharedSL(true, 4119.52, 4125.0, 4120.0, 4119.0, 0.01, 2,
+                              5.00, sl, reason));
+  CHECK(reason == 2);
+
+  // A zone wider than the cap makes the clamp itself land on the wrong side.
+  CHECK(!Exec_ComputeSharedSL(true, 4100.0, 4125.0, 4120.0, 4114.0, 0.01, 2,
+                              5.00, sl, reason));
+  CHECK(reason == 2);
+}
+
+static void test_tp_and_slplus_use_own_fill_price() {
+  CHECK(near(Exec_ComputeTP(true, 4120.0, 30), 4123.0));
+  CHECK(near(Exec_ComputeTP(true, 4119.5, 50), 4124.5));
+  CHECK(near(Exec_ComputeTP(true, 4119.0, 100), 4129.0));
+  CHECK(near(Exec_ComputeSLPlus(true, 4119.5, 10), 4120.5));
+  CHECK(near(Exec_ComputeSLPlus(true, 4119.0, 10), 4120.0));
+
+  CHECK(near(Exec_ComputeTP(false, 4120.0, 30), 4117.0));
+  CHECK(near(Exec_ComputeTP(false, 4120.5, 50), 4115.5));
+  CHECK(near(Exec_ComputeTP(false, 4121.0, 100), 4111.0));
+  CHECK(near(Exec_ComputeSLPlus(false, 4120.5, 10), 4119.5));
+  CHECK(near(Exec_ComputeSLPlus(false, 4121.0, 10), 4120.0));
+}
+
+static void test_guide_numeric_examples() {
+  // Buy: zone [4119,4120] -> E1 4120 / E2 4119.5 / E3 4119.
+  MSNRZone buyZone{};
+  buyZone.valid = true;
+  buyZone.lower = 4119.0;
+  buyZone.upper = 4120.0;
+  double e1 = 0.0, e2 = 0.0, e3 = 0.0, sl = 0.0;
+  int reason = 0;
+  CHECK(Exec_ComputeLayers(buyZone, true, 0.01, 2, e1, e2, e3));
+  CHECK(Exec_ComputeSharedSL(true, 4116.52, 4125.0, e1, e3, 0.01, 2, 5.00, sl,
+                             reason));
+  CHECK(near(sl, 4116.50));
+  CHECK(Exec_ComputeSharedSL(true, 4114.02, 4125.0, e1, e3, 0.01, 2, 5.00, sl,
+                             reason));
+  CHECK(near(sl, 4115.00));
+
+  // Sell: zone [4120,4121] -> E1 4120 / E2 4120.5 / E3 4121.
+  MSNRZone sellZone{};
+  sellZone.valid = true;
+  sellZone.lower = 4120.0;
+  sellZone.upper = 4121.0;
+  CHECK(Exec_ComputeLayers(sellZone, false, 0.01, 2, e1, e2, e3));
+  CHECK(Exec_ComputeSharedSL(false, 4110.0, 4123.48, e1, e3, 0.01, 2, 5.00, sl,
+                             reason));
+  CHECK(near(sl, 4123.50));
+  CHECK(Exec_ComputeSharedSL(false, 4110.0, 4125.98, e1, e3, 0.01, 2, 5.00, sl,
+                             reason));
+  CHECK(near(sl, 4125.00));
+}
+
+static void test_basket_risk_uses_all_three_distances() {
+  // Clamped buy: SL 4115, entries 4120/4119.5/4119 -> 50/45/40 pips.
+  // Cent XAUUSDc: 10 USC per pip per lot; 0.15 lot -> 1.5 USC per pip.
+  const double risk = Exec_ComputeBasketRisk(50.0, 45.0, 40.0, 0.15, 10.0);
+  CHECK(near(risk, 135.0 * 0.15 * 10.0));  // 202.5 USC
+  CHECK(near(Exec_ComputeBasketRisk(-1.0, 10.0, 10.0, 0.15, 10.0), 0.0));
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -219,11 +399,21 @@ int main() {
   test_cisd_respects_after_index();
   test_touch_chain_spans_repeated_wicks();
   test_touch_chain_reports_no_touch();
+  test_entry_zone_for_ifvg_is_full_zone();
+  test_entry_zone_for_cisd_uses_three_bar_band();
+  test_layers_are_equal_thirds_and_ordered();
+  test_layers_reject_too_narrow_zone();
+  test_shared_sl_uses_window_extreme_not_last_candle();
+  test_shared_sl_clamps_to_fifty_pips_from_e1();
+  test_shared_sl_skips_when_not_beyond_far_entry();
+  test_tp_and_slplus_use_own_fill_price();
+  test_guide_numeric_examples();
+  test_basket_risk_uses_all_three_distances();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("12 Exec kernel test groups passed\n");
+  std::printf("22 Exec kernel test groups passed\n");
   return 0;
 }
