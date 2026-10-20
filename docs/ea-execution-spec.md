@@ -1,6 +1,6 @@
 # Alphatom EA Execution Spec — Frozen Definitions
 
-Status: **frozen (rounds 1-2 recorded 2026-10-21)**. These decisions bind the future EA; the MSNR indicator remains non-trading and no parity or profitability claim is valid until broker-matched validation passes. Implementation begins only after this document.
+Status: **frozen (rounds 1-3 recorded 2026-10-21)**. These decisions bind the future EA; the MSNR indicator remains non-trading and no parity or profitability claim is valid until broker-matched validation passes. Implementation begins only after this document.
 
 All prices/timings use HFM Cent `XAUUSDc` MT5 semantics: 2 digits, point/tick size `0.01`, hedging account (`HFMarketsGlobal-Live19`). `50 pips = 5.00` price change.
 
@@ -12,30 +12,52 @@ All prices/timings use HFM Cent `XAUUSDc` MT5 semantics: 2 digits, point/tick si
 ## Setup sequence (frozen)
 
 1. A wick on M1/M2/M3 enters a POI (swing level or gap band) → that is the **touch**.
-2. Only after the touch may a confirmation form; a confirmation that existed before the touch does not qualify.
+2. Only after the touch may a confirmation form; a confirmation that existed before the touch does not qualify. Mechanically: the confirmation bar index must be **strictly greater** than the touch bar index.
 3. Confirmation = **IFVG or CISD** aligned with the plan direction; just one is required.
-4. Entry waits for the **retest**: trigger IFVG → retest must return to the IFVG zone used as confirmation; trigger CISD → retest must return to the CISD level/band used as confirmation.
+4. Entry waits for the **retest**: trigger IFVG → retest must return to the IFVG zone used as confirmation; trigger CISD → retest must return to the CISD level/band used as confirmation. The retest bar index must be **strictly greater** than the confirmation bar index, so the breaking candle's own pre-close wick can never arm the orders.
 
 ## Round-1 frozen detections (user decisions 2026-10-21)
 
-- **IFVG:** confirmed on candle **close through** the opposite FVG zone boundary on M1/M2/M3 (body-close breach; wick alone never flips it intrabar). The inverted zone flips role (bearish FVG broken upward becomes support/bullish IFVG; mirrored otherwise) and becomes the confirmation/retest zone.
-- **CISD:** anchor = **open of the first candle** of the latest same-direction delivery run on M1/M2/M3. CISD when a candle closes beyond that open (bullish run, then close below the first up-candle's open = bearish CISD; mirrored). No minimum run length in this round (N=0); revisit only as a documented change if false positives appear.
+- **IFVG:** confirmed on candle **close through** the opposite FVG zone boundary on M1/M2/M3 (body-close breach; wick alone never flips it intrabar). The inverted zone flips role and becomes the confirmation/retest zone. Direction map (guide §6.1): a **bearish FVG closed through upward** becomes a **bullish IFVG = support → buy** plan; a **bullish FVG closed through downward** becomes a **bearish IFVG = resistance → sell** plan.
+- **CISD:** anchor = the **open of the first candle of the latest delivery run**, and the trigger close must go against that run (guide §6.2). Direction map: a **bullish CISD** (buy) = a candle closes **above** the anchor of the latest **bearish** delivery run; a **bearish CISD** (sell) = a candle closes **below** the anchor of the latest **bullish** delivery run. The run definition and the minimum run length are inputs (`CISDMinRun`); the round-1 value `N=0` is superseded pending the audit decision D-2 (see `docs/ea-spec-audit.md` F-5: at N=0 a confirmation exists on ~48% of M1 bars).
 - **Entry zone:** trigger IFVG → the three layers are spread inside the **full IFVG zone**. Trigger CISD (a level) → zone = **3-bar M1 high/low band** around the CISD level, with configurable minimum/maximum width inputs.
-- **Layer lifetime:** the three pending orders are placed when the entry zone is first touched; they remain active while their POI stays valid, and are canceled when the POI becomes Broken or the aligned signal reverses (round 2 defines the exact cancel trigger).
+- **Layer lifetime:** the three pending orders are placed when the entry zone is first touched; they remain active while their POI stays valid, and are canceled when the POI becomes Broken (round 2 narrows this: the round-1 "or the aligned signal reverses" clause is **superseded**).
 
 ## Order intent (carried from the agreed strategy; round 2 confirms order type)
 
 - Three entries, **0.15 lots each**; all inside the entry zone. Sell stacking `E2 > E1` and `E3 > E2` (E1 lowest); buy mirrored `E2 < E1` and `E3 < E2` (E1 highest).
-- Shared SL anchored at the **extreme wick of the touch candle**; at most **50 pips (5.00)** from the farthest entry.
-- TP per fill: E1 **+30**, E2 **+50**, E3 **+100** pips. After TP1 fill closes E1, the E2/E3 SL is locked to **+10 pips**.
+- Shared SL anchored at the **extreme wick of the touch chain** (all touching candles; round 3 clarifies the round-1 wording) and **capped at 50 pips (5.00)** from the farthest entry (E1) by clamping — see round 3.
+- TP per fill: E1 **+30**, E2 **+50**, E3 **+100** pips from each layer's own fill. After TP1 closes E1, the E2/E3 SL is locked to **+10 pips from each layer's own entry** (round 3).
 
 ## Round-2 frozen rules (user decisions 2026-10-21)
 
 - **Retest gating:** the three pending orders are placed as soon as an M1/M2/M3 wick touches the edge of the entry zone (same wick-touch convention as the indicator). No minimum depth, no close requirement.
-- **Shared SL:** extreme wick **± 2 ticks (`0.02`)** beyond the wick. If the distance from SL to the farthest entry exceeds `5.00` (50 pips), the entire setup is **skipped** — never clamped to the cap.
+- **Shared SL:** extreme wick **± 2 ticks (`0.02`)** beyond the wick. ~~If the distance from SL to the farthest entry exceeds `5.00` (50 pips), the entire setup is **skipped** — never clamped to the cap.~~ *(superseded by round 3: clamp, see below)*
 - **Order type:** simple **GTC limit** orders at the three layer prices; no broker expiry — cancellation is EA logic.
 - **Unfilled layers:** on the TP1 lock event (E1 closed, E2/E3 SL locked to +10 pips) or on any cancellation event, layers still unfilled are **canceled**; the setup continues with whichever layers filled.
 - **Cancel trigger (refines round 1):** unfilled layers are canceled **only when the POI that sourced the setup becomes Broken** on its origin timeframe (M15/M30/H1). Broken POIs elsewhere or opposing confirmations do not cancel in v1; the round-1 "or the aligned signal reverses" clause is superseded by this narrowing.
+
+## Round-3 frozen rules (user decisions 2026-10-21, guide §8 cross-checked)
+
+- **SL anchor window:** the shared SL references the **extreme wick of the whole touch chain** — every M1/M2/M3 candle whose wick touched the POI, from the first touch candle until the moment the orders are placed (guide §8.1: "gunakan wick terjauh seluruh candle sentuh — bukan hanya candle terakhir"). SL is that extreme **± 2 ticks (`0.02`)** and does not change after arming **until the TP1 lock replaces it with the per-layer SL+**. *(Audit F-7: the window's endpoint and the resulting geometry are pending decision D-1 — see `docs/ea-spec-audit.md`.)*
+- **50-pip cap = clamp, not skip:** the "entry farthest from SL" in price space is always **E1** (fill-order labels: buy `E1 > E2 > E3` with SL below → E1 highest; sell `E1 < E2 < E3` with SL above → E1 lowest; both put E1 farthest from SL). If `|SL − E1| > 5.00`, SL is **clamped to exactly 5.00 from E1** (buy: `E1 − 5.00`; sell: `E1 + 5.00`) and the setup **proceeds** (guide §8.2: "Setup tidak otomatis dilewati"). Explicit accepted trade-off (guide §8.3): the clamped SL may sit inside the reference wick. The round-2 "skip" clause is superseded.
+- **Layer placement inside the entry zone:** equal thirds — **E1 at the first-touched edge** (the edge the arming wick hits), **E2 at the zone midpoint**, **E3 at the far edge**. All three remain inside the zone, so the frozen stacking (`sell E1<E2<E3`, `buy E1>E2>E3`) holds automatically.
+- **Zone-width guard (EA-local derived rule):** three distinct limit prices require zone width ≥ 2 ticks (`0.02`); if narrower, the setup is skipped with a log line (`MinZoneWidthTicks`, default 2).
+- **SL+ after TP1 (wording fixed):** when E1 fills and its TP (+30 pips) closes it, the remaining E2/E3 SL is locked at **+10 pips measured from each layer's own entry** (E2's SL = `E2_entry ± 1.00` toward profit; E3 likewise) — guide table row "SL+ layer 2 dan 3".
+- **Concurrency:** at most **1 active setup per direction** (1 sell + 1 buy can coexist). While a direction has an active setup, other POIs cannot start a new setup in that direction until the active one completes or cancels (per-direction busy gate; POIs keep their own states).
+
+## Audit clarifications (audit 2026-10-21, `docs/ea-spec-audit.md`)
+
+These close the gaps found by re-reading the strategy guide against the frozen rules and the existing code. Items marked *(proposal — owner veto)* are EA-local readings of guide §4/§5 that the owner may still overturn.
+
+- **POI eligibility *(proposal — owner veto)*:** a setup may only start on a POI whose source-TF state (evaluated on the last **closed** source-TF bar) is `FRESH` or `FLIPPED_FRESH` — i.e. an area that is still "fresh" in its current role (guide §4: "area fresh hanya membuat POI layak diamati"). `UNFRESH` (already wicked on its source TF) and `BROKEN` are not eligible. Freshness is a *qualifier*, never a guarantee (guide §4).
+- **Plan direction derivation (F-2):** the POI role decides the plan — `MSNR_ROLE_SUPPORT` → **buy** plan, `MSNR_ROLE_RESISTANCE` → **sell** plan (gap zones: bullish FVG → support, bearish FVG → resistance). Only confirmations aligned with that plan qualify. A POI that later flips role is re-evaluated under the cancel rule (decision D-3).
+- **Confirmation/retest ordering (F-3):** confirmation bar index > touch bar index; retest bar index > confirmation bar index; the retest is a wick touch of the confirmation zone (inclusive intersection), no depth or close requirement.
+- **M1/M2/M3 conflict priority (F-6, EA-local):** all three execution timeframes are monitored; the **earliest** valid confirmation after the touch, per direction, defines the confirmation zone; at most one setup per direction is active. Overlapping candles across timeframes do not alter the touch-chain extreme (same underlying ticks).
+- **Layer price hygiene (F-10):** layer prices are rounded to the tick grid (`0.01`) and must remain strictly ordered (`E1<E2<E3` sell, `E1>E2>E3` buy) and all inside the zone; if rounding collapses two prices, the setup is skipped with a log line.
+- **Closed bars and session gaps (F-11):** the EA consumes closed bars only. HFM `XAUUSDc` has a daily break 00:00–01:00 server time with no bars, and the last bar of a session stays forming until the first post-reopen tick; no touch, confirmation, retest or break may be derived from a forming or zero-range bar.
+- **Basket risk logging (F-8):** every armed setup logs the guide §11.2 basket risk `tickValue × 0.15 × (d1+d2+d3)` in account currency, using the live contract specification read from the terminal (not from published web specs). v1 logs the figure; the owner must set a money cap (guide §13 leaves it undefined) before any live order is enabled.
+- **Scope divergence (D-4):** guide §2.1 states the TradingView indicator is the POI map and that no script recomputes POIs. The EA cannot read TradingView, so it uses the validated MT5 MSNR replica as its POI map; the EA's POI set may therefore differ from the TV chart, which is an additional reason the HFM multi-session validation is a hard prerequisite before live use.
 
 ## Remaining before any autonomous trading
 
