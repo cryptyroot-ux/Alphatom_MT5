@@ -51,6 +51,30 @@ Status: **partial**. Host tests pass and MetaEditor compilation/runtime attachme
 - **Gap starvation — resolved (2026-10-21).** The user selected a combined cap of eight candidates per timeframe, ordered newest creation bar first (same-bar ties: swing before gap, then swing-high before swing-low; both local deterministic choices). Implemented test-first: failing C++/Python selection tests, then kernel `MSNR_CandidatePrecedes` plus an indicator-side swing/gap candidate queue; MetaEditor rebuild **0 errors / 0 warnings**. HFM re-audit renders M15 5 swing + 3 gap, M30 5 swing + 3 gap, H1 4 swing + 4 gap. An independent replay using the kernel's band-separation merge rule (`MSNR_ZoneDistance`: zero when bands overlap) matches every selection, price/bounds, label, and replayed lifecycle state on all three timeframes. An apparent H1 mismatch in the first re-check was a verifier bug (midpoint distance instead of band-separation distance), not an indicator defect. Gray gap bands are visibly rendered on the tiled charts. Gap output is validated for this sample; long-duration multi-session validation remains open.
 - Audit CSVs are in the active terminal's `MQL5/Files` directory (`Alphatom_HFM_OHLC_audit.csv`, `Alphatom_HFM_objects_audit.csv`, and `Alphatom_HFM_summary_audit.csv`). No orders or positions were changed.
 
+### Cross-close snapshot — CORRECTED and PASSED (2026-10-21, 05:03 → 05:35 local / server 01:03 → 01:35)
+
+**Correction first.** The earlier "byte-identical object snapshot pair" claim (and the reason it was previously read as a cross-close test) was **invalid**: the scheduled job ran `DataDepthProbe` instead of the OHLC/object audit, so the compared CSVs were the 04:30 files copied verbatim, and the terminal's HFM data stream had already died at the end of the session (23:59 server). Identical files therefore proved nothing about the indicator. The real cross-close comparison was executed afterwards, after the feed was restored, and it passes.
+
+**Feed incident.** After the last tick of the session (23:59 server = 20:59 UTC) the portable terminal stopped receiving quotes: `CopyTicks` failed with **err 4801 (no ticks)**, `PERIOD_H1/H4` reported no data, and symbol properties read as zeros (Digits 0, Point 0, tick size 0, `OrderCalcProfit` err 4002) while the MT5 trade socket stayed `ESTABLISHED`. An external reference (gold-api, 22:25 UTC) showed the market open at 4132.40 — so the stall was on the terminal side, not the broker's. The session break itself is confirmed from 521 days of exported M1 history: **326 gaps of exactly 61 minutes**, last bar 23:59 → first bar 01:00 server, plus ~2942-minute weekend gaps. Recovery: restart of the portable terminal as its owning user `mt5` (the wine prefix is not root-owned; running as root is refused) → quotes resumed within ~90 s.
+
+**Cross-close evidence (04:30 snapshot vs 05:35 snapshot, spanning the 23:45 close and the first post-reopen M15/H1 closes):**
+
+| Check | Result |
+|---|---|
+| Previously closed bars rewritten? | **No** — every pre-existing M15/M30/H1 bar kept identical OHLC; the 23:45 bar finalised at the same values it showed while forming |
+| Bars added | M15 `01:00` (closed) + `01:15` (forming); M30 `01:00`; H1 `01:00`; window slid by the same number of oldest bars |
+| Levels removed | 3 (M15 SH 4124.96, M15 SL 4120.03, M30 SH 4124.78) — evicted by the documented newest-eight cap, not by a defect |
+| Levels added | 3 (M15 SL 4120.17 *S Fresh*, M15 GAP 4126.08 *S Fresh*, M30 GAP 4124.76 *S Fresh*) |
+| Lifecycle transitions | `M15 R Fresh → S Flipped fresh`, `M30 R Fresh → S Flipped fresh`, `M30 R Flipped unfresh → R Broken` — all as specified |
+| Re-render side effects | 31 objects differ only in the label anchor `time` field; no price, role or status drift |
+| Data integrity after restart | 1500 bars per TF, 0 copy error, 0 invalid OHLC, 0 non-monotonic times, 300 direct `iTime`+OHLC comparisons with **0 mismatches** |
+
+Conclusion: the indicator repaints nothing, honours closed-bar-only updates, applies the documented lifecycle and cap policy, and the previously claimed "idempotence across close" evidence is now replaced by a real across-close test.
+
+### Strategy guide audit → EA spec (2026-10-21)
+
+The full strategy PDF was re-read (text extracted with `pdftotext -layout`, 582 lines) and compared clause by clause against the frozen EA spec and the implementation. Full report: `docs/ea-spec-audit.md`. Outcome: 12 findings (F-1…F-12), one scope divergence (D-4) and three owner decisions (D-1 shared-SL geometry, D-2 CISD minimum run length, D-3 POI role-flip cancellation). Verified by independent recomputation of every numeric example in the guide (buy/sell entries, structural SL, 50-pip clamp, TP 30/50/100, SL+10 per own entry) and by measuring the CISD definition on 750,062 HFM M1 bars (at the frozen N=0 a confirmation exists on ~48% of M1 bars).
+
 ## MT5 attachment and runtime
 
 1. Verified on VPS: `Alphatom_MSNR_MTF.mq5` and `MSNRKernel.mqh` installed in the active portable terminal's `MQL5/Indicators` and `MQL5/Include/Alphatom`; MetaEditor GUI reported **0 errors, 0 warnings** and generated `Alphatom_MSNR_MTF.ex5`. The saved template is now applied to XAUUSDc H1, M30, M15, and M1 charts (the first attachment was on M5 before that chart was changed to M30).
