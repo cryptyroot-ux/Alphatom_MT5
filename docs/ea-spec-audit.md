@@ -108,11 +108,11 @@ Guide §2.1 states the TradingView indicator is the POI map and that "Alphatom t
 
 Priority among M1/M2/M3 (F-6 proposes a mechanical default) · money-risk cap per setup/day (F-8 logs only) · handling of partial fills, gaps, extreme spread, news, sessions · TP "touch" vs actual fill · buffer beyond the wick (owner set 2 ticks) · zone width and retest tolerance (owner set) · order type (owner set: GTC limit).
 
-## 5. Decisions requested from the strategy owner
+## 5. Decisions requested from the strategy owner — RESOLVED 2026-10-21
 
-- **D-1 (F-7, S1):** how to keep the shared SL executable — extend the anchor window to the arming moment over all candles, or keep the literal touch-chain anchor and skip setups whose SL is not beyond the far entry.
-- **D-2 (F-5, S2):** the CISD minimum delivery-run length for v1 (`0` as frozen, or `2` recommended on the measured evidence; exposed as an input either way).
-- **D-3 (F-9, S2):** whether a POI role flip cancels an open setup (recommended: yes).
+- **D-1 (F-7, S1):** **RESOLVED — extend the anchor window to the arming moment over all candles.** The structural SL is the extreme wick of every candle from the first POI touch to the arming bar (± 2 ticks); after the 50-pip clamp the SL must still sit beyond the far entry E3, otherwise the setup is skipped with a log line (no invalid stop is ever sent). Recorded as round-4 rule D-1 in `docs/ea-execution-spec.md`.
+- **D-2 (F-5, S2):** **RESOLVED — same-colour delivery run with a minimum of 2 candles** (`CISDMinRun` default 2, exposed as an input; 326 CISD bars/day on HFM M1 versus 689 at the frozen N=0). A doji breaks the run. Recorded as round-4 rule D-2.
+- **D-3 (F-9, S2):** **RESOLVED — yes, a POI role flip cancels the open setup** (unfilled layers removed, filled layers keep their own SL/TP as on the Broken path). Recorded as round-4 rule D-3.
 
 ## 6. Evidence artifacts
 
