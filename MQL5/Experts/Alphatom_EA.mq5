@@ -32,7 +32,7 @@ input int    InpTp1Pips           = 30;     // Layer 1 target (pips)
 input int    InpTp2Pips           = 50;     // Layer 2 target (pips)
 input int    InpTp3Pips           = 100;    // Layer 3 target (pips)
 input int    InpSlPlusPips        = 10;     // Post-TP1 stop lock (pips)
-input double InpRiskCapMoney      = 0.0;    // Basket risk cap (deposit currency, 0=off)
+input double InpRiskCapMoney      = 440.0;   // Basket risk cap (deposit currency, 0=off)
 
 //--- POI map inputs: must match the chart indicator
 input int    InpSwingLeft          = 3;
