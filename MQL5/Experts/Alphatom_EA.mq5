@@ -439,10 +439,13 @@ void EaLogEvent(const bool isBuy, const ExecSetup &setup, const ExecEvent &ev)
       extra = StringFormat(" poi=[%.2f,%.2f] tf=M%d",
                            setup.poiLower, setup.poiUpper,
                            setup.poiSourceMinutes);
+   // A fill or a close has no bar of its own: stamp the wall clock instead
+   // of the epoch zero that the kernel leaves in the event.
+   const long stamp = (ev.time > 0) ? (long)ev.time : (long)TimeCurrent();
    PrintFormat("ALPHA %s %s %s %s t=%s reason=%s(%d)%s",
                InpInstanceTag, (isBuy ? "BUY" : "SELL"), EaEventName(ev.type),
                EaPhaseName(setup.phase),
-               TimeToString((datetime)ev.time, TIME_DATE | TIME_MINUTES),
+               TimeToString((datetime)stamp, TIME_DATE | TIME_MINUTES),
                EaReasonName(ev.reason), ev.reason, extra);
   }
 
