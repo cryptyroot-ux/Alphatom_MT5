@@ -108,6 +108,23 @@ Guide §2.1 states the TradingView indicator is the POI map and that "Alphatom t
 
 Priority among M1/M2/M3 (F-6 proposes a mechanical default) · money-risk cap per setup/day (F-8 logs only) · handling of partial fills, gaps, extreme spread, news, sessions · TP "touch" vs actual fill · buffer beyond the wick (owner set 2 ticks) · zone width and retest tolerance (owner set) · order type (owner set: GTC limit).
 
+**Status after the long backtest (2026-10-21, `docs/backtest-report.md`):**
+
+| Open item | Status |
+|-----------|--------|
+| money-risk cap per setup | **decided**: 440 USC (`InpRiskCapMoney`); the per-day cumulative cap is still open |
+| priority among M1/M2/M3 | mechanical default in force (earliest valid confirmation wins per direction) |
+| order type, buffer, zone width, retest tolerance | decided by the owner and frozen in the spec |
+| handling of partial fills, gaps, extreme spread, news, sessions | **still open** — the backtest shows the spread alone moves the expectancy from −1.94 to −3.99 USC |
+| TP "touch" vs actual fill | targets are native broker orders; the backtest charges the spread on the round trip |
+
+**The backtest verdict:** the frozen specification has **no edge**. Over 13.5
+months of real HFM data the expert would have traded 21 020 positions with a
+41.6 % win rate, a profit factor of 0.900 and an expectancy of −1.94 USC per
+position (≈ 7.4 standard deviations below zero). Every variant tried is
+negative as well. The implementation is faithful; the parameters are the
+problem.
+
 ## 5. Decisions requested from the strategy owner — RESOLVED 2026-10-21
 
 - **D-1 (F-7, S1):** **RESOLVED — extend the anchor window to the arming moment over all candles.** The structural SL is the extreme wick of every candle from the first POI touch to the arming bar (± 2 ticks); after the 50-pip clamp the SL must still sit beyond the far entry E3, otherwise the setup is skipped with a log line (no invalid stop is ever sent). Recorded as round-4 rule D-1 in `docs/ea-execution-spec.md`.

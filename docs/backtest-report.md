@@ -163,27 +163,97 @@ until the next terminal restart. The fix is deployed (`5864a53`, kernel
 **Note on the earlier numbers.** Any backtest result obtained before this fix
 is invalid: the dead period silently removed trades from the sample.
 
-## 6. Why the strategy does not work
+## 6. Why the strategy does not work (measured, not guessed)
 
-The mechanics are internally consistent (the expert implements the frozen
-specification faithfully, which the test suite verifies), but the geometry of
-the specification does not produce an edge:
+The mechanics are internally consistent — the expert implements the frozen
+specification faithfully, which the test suite verifies — but the geometry of
+the specification leaves no edge. Every number below is measured by the
+harness on the base run (M1, spread 0.34, D-4 off, 21 020 positions).
 
-* the shared stop is the extreme wick of the touch chain, so the average loss
-  (33.3 USC ≈ 22 pips) is *not* the 50-pip cap but a much tighter structural
-  stop;
-* the targets are 30/50/100 pips, so the average win (42.1 USC ≈ 28 pips) is
-  also much smaller than the nominal targets;
-* the win rate of 41.6 % then needs an average win of ≈ 1.4× the average
-  loss to break even, and it delivers only ≈ 1.26×;
-* the TP1 lock (+10 pips) truncates 3 622 winners early, which lowers the
-  average win further;
-* the costs (spread 0.34 → 0.50) eat the remaining margin quickly.
+### 6.1 The shared stop is *not* mostly the 50-pip cap
 
-The result is a strategy that is close to a coin flip with a small negative
-tilt, traded very often (≈ 21 000 positions in 13.5 months, i.e. several
-positions per day) — which is exactly the profile that produces a large
-drawdown for a small expected loss.
+| Measurement | Value | Spec reference |
+|---|---|---|
+| Average distance E1 → shared SL | **33.7 pips** | spec §7 / D-1: structural SL (extreme wick of the touch chain ± 2 ticks) |
+| Setups where the 50-pip cap actually bound | **2 095 of 8 238 (25 %)** | spec §7: the cap is a clamp, not a skip |
+| Average loss per closed position | **33.32 USC ≈ 22.2 pips** | 1.50 USC per pip per layer |
+
+The 22-pip average loss is *not* the stop distance. Three effects shorten it:
+
+1. the stop is shared, so E2 and E3 sit closer to it than E1 does (the
+   average is taken over all three layers);
+2. a layer that is already beyond the market when the basket is armed is
+   filled at the market (spec, marketable-layer clarification), which is a
+   better price than the nominal layer price;
+3. the validity guard (spec D-1: the SL must sit beyond E3) skips setups
+   whose stop would land on the wrong side.
+
+So the stop is a *real* structural stop in three quarters of the setups, and
+the 50-pip cap is a genuine but minority clamp.
+
+### 6.2 The wins are a mix of targets and the TP1 lock
+
+| Exit | Count | Average | Note |
+|------|-------|---------|------|
+| Target reached (TP1/TP2/TP3) | **5 176** | **60.76 USC ≈ 40.5 pips** | spec §6: +30 / +50 / +100 pips from each own fill |
+| Closed by the +10-pip SL+ lock (a win) | **3 571** | **15.00 USC = 10.0 pips** | spec §9 / line 47: after TP1 the E2/E3 stop is locked at +10 pips |
+| Closed by a real stop (a loss) | 12 273 | 33.32 USC ≈ 22.2 pips | |
+| **Total** | **21 020** | **42.08 USC ≈ 28.1 pips per winner** | |
+
+The TP1 lock does not truncate the target wins — it converts a *running*
+winner into a +10-pip win: 3 571 of the 8 747 winners (41 %) are E2/E3
+positions that were stopped at the locked stop after E1 had already hit its
+target. That is exactly what the specification asks for, and it is what
+pulls the average winner down from 40.5 pips (the target winners) to 28.1
+pips (all winners).
+
+### 6.3 The break-even arithmetic
+
+| Quantity | Value |
+|----------|-------|
+| Win rate | 41.6 % |
+| Required average win / average loss for break-even | `(1 − 0.416) / 0.416` = **1.404×** |
+| Delivered average win / average loss | `42.08 / 33.32` = **1.263×** |
+| Gap | **−10 % relative** → expectancy **−1.94 USC per position** |
+
+The strategy needs a 1.40× payoff and delivers 1.26×. At 21 020 positions the
+standard error of the expectancy is ≈ 0.26 USC, so the shortfall is ≈ 7.4
+standard deviations — the loss is structural, not noise.
+
+### 6.4 Costs remove the remainder
+
+| Spread | Positions | PF | Net (USC) | Expectancy |
+|--------|-----------|----|-----------|------------|
+| 0.34 (measured) | 21 020 | 0.900 | −40 843 | −1.94 |
+| 0.50 (stress) | 21 025 | 0.879 | −50 658 | −2.41 |
+| 1.00 (stress) | 21 159 | 0.813 | −84 344 | −3.99 |
+
+The spread is charged twice — on the market fills of the marketable layers
+and on the round trip of every position — so it is the single largest lever.
+At a spread of 1.00 the strategy loses more than twice as much.
+
+### 6.5 Frequency and drawdown
+
+21 020 positions over 13.5 months is **1.56 positions per day** (8 238 armed
+baskets, 2.55 filled layers each). A near-coin-flip payoff traded several
+times a day is the profile that produces a large drawdown for a small
+expected loss: the peak-to-trough drawdown is **45 637 USC**, more than
+twenty times the 2 154 USC balance of the account it was run on.
+
+### 6.6 Summary
+
+The specification is coherent and the implementation matches it; the
+*parameters* do not produce an edge. Three concrete numbers explain the
+result:
+
+* the shared structural stop is **33.7 pips** from E1 on average, so a
+  winner has to clear a ~22-pip average loss, and the 41.6 % win rate only
+  pays 1.26× where 1.40× is needed;
+* the TP1 lock turns 41 % of the winners into +10-pip wins, which is what
+  keeps the average winner at 28 pips instead of the 40 pips the target
+  winners actually deliver;
+* the frequency (1.56 positions/day) turns a −1.94 USC expectancy into a
+  −40 843 USC total and a 45 637 USC drawdown.
 
 ## 7. What would be worth trying next
 

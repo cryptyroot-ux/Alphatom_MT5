@@ -58,6 +58,15 @@ struct Options {
 
 struct Bucket {
   int touches = 0;
+  double slDistanceSum = 0.0;   // distance E1 -> shared stop, in pips
+  int slCount = 0;
+  int slClamped = 0;            // the 50 pip cap actually bound
+  int exitsTp = 0;
+  int exitsSl = 0;
+  int winsAfterTp1 = 0;         // winners closed by the +10 pip lock
+  double winTpSum = 0.0;
+  double winLockSum = 0.0;
+  double lossSlSum = 0.0;
   int confirms = 0;
   int arms = 0;
   int fills = 0;
@@ -220,14 +229,22 @@ void recordClose(Context &ctx, const bool isBuy, const int dir, const int tf,
   Bucket &p = ctx.byPoiTf[tf];
   Bucket &c = ctx.byConfirm[confirmKind];
   t.closed++; d.closed++; p.closed++; c.closed++;
-  if (isTp && dir == 0) { /* the TP1 flag is counted by the caller */ }
+  if (isTp) { t.exitsTp++; d.exitsTp++; p.exitsTp++; c.exitsTp++; }
+  else { t.exitsSl++; d.exitsSl++; p.exitsSl++; c.exitsSl++; }
   if (profit > 0.0) {
     t.wins++; d.wins++; p.wins++; c.wins++;
+    if (pips < 15.0) {          // closed by the +10 pip lock, not by a target
+      t.winsAfterTp1++; d.winsAfterTp1++; p.winsAfterTp1++; c.winsAfterTp1++;
+      t.winLockSum += profit; d.winLockSum += profit;
+    } else {
+      t.winTpSum += profit; d.winTpSum += profit;
+    }
     t.grossProfit += profit; d.grossProfit += profit; p.grossProfit += profit; c.grossProfit += profit;
     if (profit > t.maxWin) t.maxWin = profit;
   } else if (profit < 0.0) {
     t.losses++; d.losses++; p.losses++; c.losses++;
     t.grossLoss += -profit; d.grossLoss += -profit; p.grossLoss += -profit; c.grossLoss += -profit;
+    t.lossSlSum += -profit; d.lossSlSum += -profit;
     if (-profit > t.maxLoss) t.maxLoss = -profit;
   } else {
     t.scratches++; d.scratches++; p.scratches++; c.scratches++;
@@ -553,6 +570,14 @@ int main(int argc, char **argv) {
         }
         ctx.total.arms++; ctx.byDirection[dir].arms++;
         ctx.byPoiTf[tf].arms++; ctx.byConfirm[setup.confirmKind].arms++;
+        {
+          // The distance from E1 to the shared stop, in pips, and whether the
+          // 50 pip cap actually bound.
+          const double dist = std::fabs(setup.layers[0] - setup.initialSL) / EXEC_PIP_SIZE;
+          ctx.total.slDistanceSum += dist; ctx.total.slCount++;
+          ctx.byDirection[dir].slDistanceSum += dist; ctx.byDirection[dir].slCount++;
+          if (dist > 49.9) { ctx.total.slClamped++; ctx.byDirection[dir].slClamped++; }
+        }
         // Layers that are already at or beyond the market are executed at
         // market right away, exactly like the expert does.
         for (int i = 0; i < 3; ++i) {
@@ -595,6 +620,12 @@ int main(int argc, char **argv) {
                 t.grossProfit / t.grossLoss, t.closed ? t.net / t.closed : 0.0);
   else
     std::printf("profit_factor=inf (no losing position)\n");
+  std::printf("shared stop: avg=%.1f pips from E1 (clamped at 50 in %d of %d setups)\n",
+              t.slCount ? t.slDistanceSum / t.slCount : 0.0, t.slClamped, t.slCount);
+  std::printf("exits: tp=%d sl=%d | winners: target=%.2f USC avg, tp1-lock=%.2f USC avg (%d)\n",
+              t.exitsTp, t.exitsSl,
+              t.exitsTp ? t.winTpSum / t.exitsTp : 0.0,
+              t.winsAfterTp1 ? t.winLockSum / t.winsAfterTp1 : 0.0, t.winsAfterTp1);
   std::printf("avg_win=%.2f avg_loss=%.2f max_win=%.2f max_loss=%.2f max_dd=%.2f\n",
               t.wins ? t.grossProfit / t.wins : 0.0, t.losses ? t.grossLoss / t.losses : 0.0,
               t.maxWin, t.maxLoss, ctx.maxDrawdown);
