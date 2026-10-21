@@ -199,6 +199,8 @@ string EaReasonName(const int reason)
       return "STALE";
    if(reason == EXEC_REASON_OPPOSITE)
       return "OPPOSITE";
+   if(reason == EXEC_REASON_POI_GONE)
+      return "POI_GONE";
    return "UNKNOWN";
   }
 
@@ -865,11 +867,27 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
    MSNRState state = link.lastState;
    MSNRRole role = setup.poiRole;
    MSNRLevel level;
-   if(link.valid && EaFindLevel(link.tfIndex, link.created, level))
+   const bool found = link.valid && EaFindLevel(link.tfIndex, link.created, level);
+   if(found)
      {
       state = level.state;
       role = level.role;
       link.lastState = state;
+     }
+   else if(link.valid)
+     {
+      // The POI level left the map (the map keeps only the newest levels).
+      // A setup without exposure dies here, otherwise its resting GTC orders
+      // would survive forever and the direction would stay blocked.
+      ExecEvent missingEvent;
+      if(Exec_CancelForMissingPoi(setup, missingEvent))
+        {
+         EaLogEvent(isBuy, setup, missingEvent);
+         EaHandleLiveEvent(isBuy, setup, missingEvent);
+         EaClearLink(link);
+         EaWriteState();
+         return;
+        }
      }
 
    ExecEvent ev;

@@ -3,3 +3,4 @@
 *.ex5
 *.log
 __pycache__/
+data/

@@ -476,7 +476,8 @@ enum ExecReason
    EXEC_REASON_TP1 = 6,
    EXEC_REASON_CONFIG = 7,
    EXEC_REASON_STALE = 8,
-   EXEC_REASON_OPPOSITE = 9
+   EXEC_REASON_OPPOSITE = 9,
+   EXEC_REASON_POI_GONE = 10
   };
 
 enum ExecConfirmKind
@@ -815,6 +816,27 @@ bool Exec_CancelForOpposite(ExecSetup &setup, ExecEvent &outEvent)
    outEvent.type = EXEC_EVENT_CANCEL;
    outEvent.phase = setup.phase;
    outEvent.reason = EXEC_REASON_OPPOSITE;
+   return true;
+  }
+
+// The POI level of a running setup left the POI map (the map keeps only the
+// newest levels). Without this cancel a basket that never fills would keep
+// its setup - and its resting GTC orders - alive forever, and the direction
+// would be blocked for the rest of the data. A setup that already carries
+// exposure keeps running: that money still has to be managed.
+bool Exec_CancelForMissingPoi(ExecSetup &setup, ExecEvent &outEvent)
+  {
+   Exec_ClearEvent(outEvent);
+   if(!Exec_IsActive(setup))
+      return false;
+   if(Exec_CountFilled(setup) > 0)
+      return false;
+   Exec_CancelPending(setup);
+   setup.phase = EXEC_CANCELED;
+   setup.skipReason = EXEC_REASON_POI_GONE;
+   outEvent.type = EXEC_EVENT_CANCEL;
+   outEvent.phase = setup.phase;
+   outEvent.reason = EXEC_REASON_POI_GONE;
    return true;
   }
 

@@ -1029,6 +1029,40 @@ static void test_cancel_for_opposite_ignores_an_idle_setup() {
   CHECK(setup.phase == EXEC_IDLE);
 }
 
+
+static void test_missing_poi_cancels_a_setup_without_exposure() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  // The POI level left the map: the setup and its resting orders must die.
+  CHECK(Exec_CancelForMissingPoi(setup, ev));
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(ev.reason == EXEC_REASON_POI_GONE);
+  CHECK(setup.phase == EXEC_CANCELED);
+  CHECK(setup.layerState[0] == EXEC_LAYER_CANCELED);
+  CHECK(setup.layerState[1] == EXEC_LAYER_CANCELED);
+  CHECK(setup.layerState[2] == EXEC_LAYER_CANCELED);
+  CHECK(!Exec_IsActive(setup));
+}
+
+static void test_missing_poi_keeps_a_setup_with_exposure() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(Exec_RecordFill(setup, 0, setup.layers[0], cfg, ev));
+
+  // Exposure has to be managed to its target or stop, whatever happens to
+  // the POI map.
+  CHECK(!Exec_CancelForMissingPoi(setup, ev));
+  CHECK(setup.phase == EXEC_MANAGING);
+  CHECK(setup.layerState[0] == EXEC_LAYER_FILLED);
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -1074,11 +1108,13 @@ int main() {
   test_cancel_for_opposite_stops_the_setup();
   test_cancel_for_opposite_keeps_a_filled_layer_alive();
   test_cancel_for_opposite_ignores_an_idle_setup();
+  test_missing_poi_cancels_a_setup_without_exposure();
+  test_missing_poi_keeps_a_setup_with_exposure();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("44 Exec kernel test groups passed\n");
+  std::printf("46 Exec kernel test groups passed\n");
   return 0;
 }

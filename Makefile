@@ -5,8 +5,9 @@ KERNEL_TEST := $(BUILD_DIR)/msnr_kernel_tests
 EXEC_TEST := $(BUILD_DIR)/exec_kernel_tests
 LEVEL_TEST := $(BUILD_DIR)/level_replay_tests
 LIVE_REPLAY := $(BUILD_DIR)/live_replay
+BACKTEST := $(BUILD_DIR)/backtest
 
-.PHONY: test test-kernel test-exec test-levels test-python test-replay clean
+.PHONY: test test-kernel test-exec test-levels test-python test-replay backtest clean
 
 test: test-kernel test-exec test-levels test-python
 
@@ -36,6 +37,14 @@ $(EXEC_TEST): tests/exec_kernel_tests.cpp MQL5/Include/Alphatom/ExecKernel.mqh M
 # re-export it with MQL5/Experts/AlphatomBarsExport.mq5.
 test-replay: $(LIVE_REPLAY)
 	./$(LIVE_REPLAY) tests/data/live_replay_m1_20261021.csv tests/data/live_replay_poi_20261021.csv
+
+# Long backtest over the recorded bars (needs data/BEX_m1.csv, data/BEX_poi.csv).
+backtest: $(BACKTEST)
+	./$(BACKTEST) --m1 data/BEX_m1.csv --poi data/BEX_poi.csv --report data/backtest_trades.csv
+
+$(BACKTEST): tests/backtest.cpp MQL5/Include/Alphatom/ExecKernel.mqh MQL5/Include/Alphatom/MSNRLevels.mqh MQL5/Include/Alphatom/MSNRKernel.mqh
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ tests/backtest.cpp
 
 $(LIVE_REPLAY): tests/live_replay.cpp MQL5/Include/Alphatom/ExecKernel.mqh MQL5/Include/Alphatom/MSNRLevels.mqh MQL5/Include/Alphatom/MSNRKernel.mqh
 	mkdir -p $(BUILD_DIR)
