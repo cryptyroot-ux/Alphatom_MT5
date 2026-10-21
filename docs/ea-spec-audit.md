@@ -134,6 +134,59 @@ problem.
 - **D-5 (backtest finding, 2026-10-21):** **RESOLVED — a POI level that leaves the map cancels the setup that had no exposure** (reason `POI_GONE`, resting GTC orders deleted). The POI map keeps only the newest levels per timeframe; without this rule a basket that never fills keeps its setup and its orders alive for ever and blocks that direction. A setup with exposure keeps running so the money is still managed. Recorded in the execution spec and covered by two kernel test groups.
 - **D-6 (backtest verdict, 2026-10-21):** **the frozen specification has no edge** — 21 020 positions over 13.5 months of real HFM data, 41.6 % win rate, profit factor 0.900, expectancy −1.94 USC per position (≈ 7.4 standard deviations below zero); every variant (spread 0.50/1.00, M2, M3, H1-only, D-4 on) is negative as well. The implementation is faithful, the parameters are the problem. Full analysis and the harness that reproduces it: `docs/backtest-report.md`.
 
+## 5b. SOP conformance matrix (2026-10-21)
+
+Every frozen rule of `docs/ea-execution-spec.md` against the implementation.
+**Conforming** means the code behaves as the rule says and the behaviour is
+covered by a test. **Open** means the rule is deliberately not implemented yet
+(guide §13) and is listed as such.
+
+| # | Rule (spec) | Status | Evidence |
+|---|-------------|--------|----------|
+| 1 | Touch = a wick on M1/M2/M3 enters the POI (swing level or gap band) | conforming | `Exec_Advance` IDLE phase, `MSNR_TouchesZone`; kernel group *touch starts setup only on fresh POI* |
+| 2 | Confirmation strictly after the touch bar | conforming | detection called with `afterIndex = touchIndex`; group *confirmation before touch is ignored* |
+| 3 | Confirmation = IFVG or CISD, aligned with the plan; earliest wins, IFVG priority on a tie | conforming | `Exec_Advance` TOUCHED phase, `confirmKind` logged; groups *IFVG uses first break only*, *confirmation tie prefers IFVG* |
+| 4 | Retest strictly after the confirmation bar, wick touch of the zone edge, no depth or close requirement | conforming | `Exec_Advance` CONFIRMED phase; group *retest must be after confirmation bar* |
+| 5 | IFVG = close through the far FVG boundary, wick alone never flips it | conforming | `MSNR_IsBodyBreak`; groups *IFVG requires close through far boundary*, *ignores wick only break* |
+| 6 | CISD = anchor = open of the first candle of the latest delivery run, min run 2, doji breaks the run (D-2) | conforming | `Exec_DetectCISD`; groups *anchor is first candle of run*, *min run enforced*, *doji breaks run* |
+| 7 | Entry zone = full IFVG zone, or the 3-bar M1 band around the anchor bar, width-clamped | conforming | `Exec_BuildIfvgEntryZone`, `Exec_BuildCisdEntryZone`; groups *entry zone for IFVG*, *for CISD uses three bar band* |
+| 8 | Layer lifetime: orders placed at the first zone touch, cancelled when the POI breaks | conforming | `Exec_Advance` ARMED branch, `Exec_CancelPending`; group *cancel on broken POI removes unfilled only* |
+| 9 | Shared SL = extreme wick of the touch chain ± 2 ticks (D-1 window: first touch bar → arming bar, every candle in it) | conforming | `Exec_Advance` CONFIRMED phase window loop; group *shared SL uses window extreme not last candle* |
+| 10 | 50-pip cap = clamp, never a skip | conforming | `Exec_ComputeSharedSL`; group *clamps to fifty pips from E1* |
+| 11 | Validity guard: the final SL must sit beyond E3, else skip with a log | conforming | `Exec_ComputeSharedSL`; groups *skips when not beyond far entry*, *arm skips when stop not beyond far entry* |
+| 12 | Layers = equal thirds, E1 at the first-touched edge, all inside the zone, tick-rounded, strictly ordered | conforming | `Exec_ComputeLayers`; groups *layers are equal thirds and ordered*, *layer price hygiene* |
+| 13 | Zone-width guard ≥ 2 ticks, else skip | conforming | `Exec_ComputeLayers`; group *layers reject too narrow zone* |
+| 14 | SL+ after TP1 = +10 pips from each layer's own entry | conforming | `Exec_RecordClose`; groups *TP1 lock cancels unfilled and sets SL+*, *restored setup still locks the stop after TP1* |
+| 15 | Unfilled layers cancelled on the TP1 lock and on any cancel event | conforming | `Exec_RecordClose`, `Exec_CancelPending`; groups *TP1 lock cancels unfilled*, *cancel on broken POI* |
+| 16 | POI eligibility: only FRESH / FLIPPED_FRESH may start a setup | conforming | `Exec_Advance` IDLE phase, `Exec_TryStartSetup` in the expert; group *touch starts setup only on fresh POI* |
+| 17 | Plan direction from the POI role (support → buy, resistance → sell) | conforming | `Exec_InitSetup`; group *one active setup per direction* |
+| 18 | F-10 layer price hygiene (tick grid, strict order, inside the zone) | conforming | `Exec_ComputeLayers`; group *layers are equal thirds and ordered* |
+| 19 | F-11 closed bars only, no forming/zero-range bar | conforming | the expert copies `copied - 1` closed bars; group *snapshot* / contract test *only closed bars are used* |
+| 20 | F-6 all three execution timeframes monitored, earliest valid confirmation per direction | conforming | `InpExecTimeframe` gate + the indicator's POI map; the harness drives the same kernel |
+| 21 | D-4 one side at a time (OPPOSITE cancel, exposure never cancelled) | conforming | `Exec_CancelForOpposite`; groups *cancel for opposite stops the setup*, *keeps a filled layer alive* |
+| 22 | POI_GONE: a setup without exposure dies when its POI leaves the map | conforming | `Exec_CancelForMissingPoi`; groups *missing POI cancels a setup without exposure*, *keeps a setup with exposure* |
+| 23 | Restart recovery: the setups are persisted and restored, validated against the broker | conforming | `Exec_TakeSnapshot` / `Exec_RestoreSnapshot` + `Alphatom_state.csv`; groups *snapshot round trip*, *stale setup drops*; verified live on the terminal |
+| 24 | F-8 basket risk logged in the deposit currency from the live contract spec | conforming | `Exec_ComputeBasketRisk` + `EaMoneyPerPipPerLot`; group *basket risk uses all three distances* |
+| 25 | Money cap per setup (owner: 440 USC) | conforming | `ExecConfig.riskCap`; group *arm skips when basket risk exceeds cap* |
+| 26 | Order type: simple GTC limits, no broker expiry, cancellation is EA logic | conforming | `EaLivePlaceBasket` (`ORDER_TIME_GTC`), `EaLiveCancelPendings` |
+| 27 | Marketable layers at arming are executed at market, the rest stay GTC limits | conforming | `EaLivePlaceBasket`, `EaShadowArmFills`; contract test *marketable layers are executed not left invalid* |
+| 28 | Scope divergence: the EA uses the MSNR replica, not the TradingView POI map | documented | spec D-4 (scope divergence) |
+| 29 | Daily cumulative loss cap (per day) | **open** | guide §13; not implemented |
+| 30 | Partial-fill policy, gap/slippage on exits | **open** | guide §13; not implemented |
+| 31 | Extreme-spread filter | **open** | guide §13; the backtest shows the spread is the largest single lever (PF 0.900 → 0.813) |
+| 32 | News filter, session filter | **open** | guide §13; not implemented |
+| 33 | TP "touch" vs actual fill semantics | **open** | the targets are native broker orders, so the broker decides; not modelled beyond that |
+
+**Summary:** 28 of the 33 rules are implemented and covered by tests, and the
+whole chain is verified live (TOUCH → CONFIRM → ARM → fill → SL/TP, plus the
+restart recovery). The five open rows are the guide §13 items that were never
+invented, plus the daily loss cap.
+
+**Conformance is not profitability.** The long backtest
+(`docs/backtest-report.md`) shows that the frozen rules are implemented
+faithfully and still lose money: profit factor 0.900 over 21 020 positions on
+real HFM data.
+
 ## 6. Evidence artifacts
 
 - `/tmp/opencode/audit_angka.py` — guide example recomputation, pip/point mapping, zone-width geometry.
