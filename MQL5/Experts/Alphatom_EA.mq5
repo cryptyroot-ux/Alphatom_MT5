@@ -232,9 +232,15 @@ double EaMoneyPerPipPerLot()
   {
    const double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    const double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
-   if(tickSize <= 0.0 || tickValue <= 0.0)
-      return 0.0;
-   return tickValue * (EXEC_PIP_SIZE / tickSize);
+   const double tickValueAny = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   const double contract = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double tv = 0.0;
+   if(tickValue > 0.0)            tv = tickValue;          // preferred: per-tick loss value
+   else if(tickValueAny > 0.0)    tv = tickValueAny;       // generic tick value
+   if(tickSize > 0.0 && tv > 0.0)
+      return tv * (EXEC_PIP_SIZE / tickSize);              // from live spec
+   if(contract > 0.0)             return contract * 10.0;  // fallback: 1 oz × $0.10/pip = 10 USC/pip/lot
+   return 0.0;
   }
 
 void EaBuildConfig()
@@ -799,6 +805,42 @@ void EaOnClosedBar()
    EaProcessDirection(false, g_sellSetup, g_sellLink);
   }
 
+void EaLogRuntimeProbe()
+  {
+   PrintFormat("ALPHA %s probe account: login=%I64d server=%s currency=%s leverage=1:%I64d marginMode=%s",
+               InpInstanceTag, AccountInfoInteger(ACCOUNT_LOGIN),
+               AccountInfoString(ACCOUNT_SERVER),
+               AccountInfoString(ACCOUNT_CURRENCY),
+               AccountInfoInteger(ACCOUNT_LEVERAGE),
+               EnumToString((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)));
+   PrintFormat("ALPHA %s probe symbol: %s digits=%d point=%.5f tick=%.5f tickValueLoss=%.4f tickValueProfit=%.4f contract=%.2f stopsLevel=%d freezeLevel=%d spread=%d fillingMask=%d tradeMode=%s moneyPerPipLot=%.4f",
+               InpInstanceTag, _Symbol,
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS), _Point,
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE),
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS),
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_PROFIT),
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE),
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL),
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL),
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD),
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE),
+               EnumToString((ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE)),
+               EaMoneyPerPipPerLot());
+   const ENUM_TIMEFRAMES timeframes[6] =
+     {PERIOD_M1, PERIOD_M2, PERIOD_M3, PERIOD_M15, PERIOD_M30, PERIOD_H1};
+   for(int i = 0; i < 6; ++i)
+     {
+      const ENUM_TIMEFRAMES tf = timeframes[i];
+      const int bars = Bars(_Symbol, tf);
+      const datetime newest = iTime(_Symbol, tf, 0);
+      const datetime bar300 = (bars > 300 ? iTime(_Symbol, tf, 299) : 0);
+      PrintFormat("ALPHA %s probe series %s bars=%d newest=%s bar300=%s",
+                  InpInstanceTag, EnumToString(tf), bars,
+                  TimeToString(newest, TIME_DATE | TIME_MINUTES),
+                  TimeToString(bar300, TIME_DATE | TIME_MINUTES));
+     }
+  }
+
 //+------------------------------------------------------------------+
 //| Init                                                             |
 //+------------------------------------------------------------------+
@@ -814,15 +856,17 @@ bool EaSymbolReady()
       return false;
      }
    const double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   const double tickValue = SymbolInfoDouble(_Symbol,
-                                            SYMBOL_TRADE_TICK_VALUE_LOSS);
    const double contract = SymbolInfoDouble(_Symbol,
                                           SYMBOL_TRADE_CONTRACT_SIZE);
-   if(tickSize <= 0.0 || tickValue <= 0.0 || contract <= 0.0)
+   if(tickSize <= 0.0 || contract <= 0.0)
      {
       Print("ALPHA init refused: symbol tick/contract properties unavailable");
       return false;
      }
+   const double tickValue = SymbolInfoDouble(_Symbol,
+                                            SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(tickValue <= 0.0)
+      Print("ALPHA warning: SYMBOL_TRADE_TICK_VALUE_LOSS is 0; using contract-spec fallback for money-per-pip");
    return true;
   }
 
@@ -876,6 +920,8 @@ int OnInit()
      }
 
    g_lastExecOpen = iTime(_Symbol, InpExecTimeframe, 0);
+
+   EaLogRuntimeProbe();
 
    PrintFormat("ALPHA %s init: shadow=%s exec=%s magic=%I64d tick=%.2f contract=%.2f money/pip/lot=%.2f %s",
                InpInstanceTag, (EaLiveEnabled() ? "false" : "true"),

@@ -79,3 +79,24 @@ class ExpertContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RuntimeCheckContractTests(unittest.TestCase):
+    """The diagnostic probe must never trade on the live CENT account."""
+
+    def setUp(self):
+        self.path = ROOT / "MQL5" / "Experts" / "AlphatomEaRuntimeCheck.mq5"
+        self.source = self.path.read_text(encoding="utf-8")
+
+    def test_exists(self):
+        self.assertTrue(self.path.is_file())
+
+    def test_never_trades(self):
+        for call in ("OrderSend", "OrderModify", "OrderDelete", "OrderClose",
+                     "PositionClose", "CTrade"):
+            self.assertNotIn(call, self.source)
+
+    def test_exports_report(self):
+        self.assertIn("Alphatom_runtime_report.csv", self.source)
+        self.assertIn("FileOpen", self.source)
+        self.assertIn("money_per_pip_per_lot", self.source)
