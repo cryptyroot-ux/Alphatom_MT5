@@ -597,6 +597,151 @@ bool Exec_IsActive(const ExecSetup &setup)
           setup.phase == EXEC_ARMED || setup.phase == EXEC_MANAGING;
   }
 
+
+// Cancel a single pending layer. Used by the restart recovery when a resting
+// order is gone but the state file still lists the layer as pending.
+bool Exec_CancelLayer(ExecSetup &setup, const int layer)
+  {
+   if(layer < 0 || layer > 2)
+      return false;
+   if(setup.layerState[layer] != EXEC_LAYER_PENDING)
+      return false;
+   setup.layerState[layer] = EXEC_LAYER_CANCELED;
+   return true;
+  }
+
+// ---------------------------------------------------------------------------
+// Restart recovery: an active setup must survive a terminal restart.
+// The snapshot carries the whole setup state except the bar indices, which
+// are re-resolved from the bar times against the current window.
+// ---------------------------------------------------------------------------
+
+struct ExecSnapshot
+  {
+   bool           valid;
+   ExecPhase      phase;
+   bool           isBuy;
+   MSNRRole       poiRole;
+   double         poiLower;
+   double         poiUpper;
+   int            poiSourceMinutes;
+   long           touchTime;
+   long           confirmTime;
+   int            confirmKind;
+   MSNRZone       entryZone;
+   double         layers[3];
+   double         initialSL;
+   double         stops[3];
+   double         tp[3];
+   double         slPlus[3];
+   bool           slLocked;
+   ExecLayerState layerState[3];
+   double         fillPrice[3];
+   double         basketRisk;
+   int            skipReason;
+  };
+
+void Exec_ClearSnapshot(ExecSnapshot &snap)
+  {
+   snap.valid = false;
+   snap.phase = EXEC_IDLE;
+   snap.isBuy = false;
+   snap.poiRole = MSNR_ROLE_SUPPORT;
+   snap.poiLower = 0.0;
+   snap.poiUpper = 0.0;
+   snap.poiSourceMinutes = 0;
+   snap.touchTime = 0;
+   snap.confirmTime = 0;
+   snap.confirmKind = EXEC_CONFIRM_NONE;
+   snap.entryZone.valid = false;
+   snap.entryZone.bullish = false;
+   snap.entryZone.lower = 0.0;
+   snap.entryZone.upper = 0.0;
+   snap.initialSL = 0.0;
+   snap.slLocked = false;
+   snap.basketRisk = 0.0;
+   snap.skipReason = EXEC_REASON_NONE;
+   for(int i = 0; i < 3; ++i)
+     {
+      snap.layers[i] = 0.0;
+      snap.stops[i] = 0.0;
+      snap.tp[i] = 0.0;
+      snap.slPlus[i] = 0.0;
+      snap.layerState[i] = EXEC_LAYER_NONE;
+      snap.fillPrice[i] = 0.0;
+     }
+  }
+
+bool Exec_TakeSnapshot(const ExecSetup &setup, ExecSnapshot &out)
+  {
+   Exec_ClearSnapshot(out);
+   if(!Exec_IsActive(setup))
+      return false;
+   out.valid = true;
+   out.phase = setup.phase;
+   out.isBuy = setup.isBuy;
+   out.poiRole = setup.poiRole;
+   out.poiLower = setup.poiLower;
+   out.poiUpper = setup.poiUpper;
+   out.poiSourceMinutes = setup.poiSourceMinutes;
+   out.touchTime = setup.touchTime;
+   out.confirmTime = setup.confirmTime;
+   out.confirmKind = setup.confirmKind;
+   out.entryZone = setup.entryZone;
+   out.initialSL = setup.initialSL;
+   out.slLocked = setup.slLocked;
+   out.basketRisk = setup.basketRisk;
+   out.skipReason = setup.skipReason;
+   for(int i = 0; i < 3; ++i)
+     {
+      out.layers[i] = setup.layers[i];
+      out.stops[i] = setup.stops[i];
+      out.tp[i] = setup.tp[i];
+      out.slPlus[i] = setup.slPlus[i];
+      out.layerState[i] = setup.layerState[i];
+      out.fillPrice[i] = setup.fillPrice[i];
+     }
+   return true;
+  }
+
+bool Exec_RestoreSnapshot(const ExecSnapshot &snap, ExecSetup &setup)
+  {
+   Exec_ClearSetup(setup);
+   if(!snap.valid)
+      return false;
+   if(snap.phase != EXEC_TOUCHED && snap.phase != EXEC_CONFIRMED &&
+      snap.phase != EXEC_ARMED && snap.phase != EXEC_MANAGING)
+      return false;
+   setup.phase = snap.phase;
+   setup.isBuy = snap.isBuy;
+   setup.poiRole = snap.poiRole;
+   setup.poiLower = snap.poiLower;
+   setup.poiUpper = snap.poiUpper;
+   setup.poiSourceMinutes = snap.poiSourceMinutes;
+   setup.touchTime = snap.touchTime;
+   setup.confirmTime = snap.confirmTime;
+   setup.confirmKind = snap.confirmKind;
+   setup.entryZone = snap.entryZone;
+   setup.initialSL = snap.initialSL;
+   setup.slLocked = snap.slLocked;
+   setup.basketRisk = snap.basketRisk;
+   setup.skipReason = snap.skipReason;
+   // The bar indices are window relative and are resolved again from the
+   // bar times on the next call.
+   setup.touchIndex = -1;
+   setup.confirmIndex = -1;
+   for(int i = 0; i < 3; ++i)
+     {
+      setup.layers[i] = snap.layers[i];
+      setup.stops[i] = snap.stops[i];
+      setup.tp[i] = snap.tp[i];
+      setup.slPlus[i] = snap.slPlus[i];
+      setup.layerState[i] = snap.layerState[i];
+      setup.fillPrice[i] = snap.fillPrice[i];
+     }
+   return true;
+  }
+
 // A setup direction is fixed by the POI role: support -> buy, resistance ->
 // sell. An active setup is never re-initialised, so the expert naturally
 // keeps at most one setup per direction.

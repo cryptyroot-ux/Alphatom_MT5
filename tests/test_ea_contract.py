@@ -25,14 +25,25 @@ class ExpertContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"return\s*!InpShadowMode\s*&&\s*g_liveAllowed\s*;")
         self.assertIn("g_liveAllowed = !InpShadowMode;", self.source)
 
-    def test_live_start_is_refused_when_state_cannot_be_recovered(self):
-        # A live start with positions of this magic is refused and downgraded
-        # to shadow, because restart recovery is not implemented.
-        self.assertRegex(
-            self.source,
-            r"g_liveAllowed\s*&&\s*EaCountOwnPositions\(\)\s*>\s*0",
-        )
+    def test_live_start_is_refused_when_the_state_does_not_match_the_broker(self):
+        # Positions or resting orders of this magic that the state file does
+        # not know about mean the state is stale: live must be refused and the
+        # expert falls back to shadow.
+        self.assertIn("EaValidateRecovery", self.source)
+        self.assertIn("running shadow", self.source)
+        self.assertIn("open positions exist without a matching state file", self.source)
+        self.assertIn("resting orders exist without a matching state file", self.source)
         self.assertRegex(self.source, r"g_liveAllowed\s*=\s*false;")
+
+    def test_state_file_is_written_and_restored(self):
+        # The setups are persisted so a terminal restart can rebuild them.
+        self.assertIn("Alphatom_state.csv", self.source)
+        self.assertIn("EaWriteState", self.source)
+        self.assertIn("EaReadState", self.source)
+        self.assertIn("Exec_TakeSnapshot", self.source)
+        self.assertIn("Exec_RestoreSnapshot", self.source)
+        # The state must exist before the orders are sent.
+        self.assertRegex(self.source, r"EXEC_EVENT_ARM\)\s*\n\s*EaWriteState\(\);")
 
     def test_filling_mode_follows_the_broker(self):
         # HFM Cent only accepts FOK; a hard-coded RETURN would be rejected.

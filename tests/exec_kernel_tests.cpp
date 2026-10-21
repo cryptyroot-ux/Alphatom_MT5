@@ -828,6 +828,158 @@ static void test_sliding_window_drops_a_stale_setup() {
   }
 }
 
+
+// --- Task 7: restart recovery ---------------------------------------------
+//
+// A terminal restart must not lose a running setup. The kernel therefore
+// exposes a snapshot that survives a save/restore round trip and keeps the
+// restored setup fully functional: the TP1 lock and the POI cancel must
+// still fire after a restore.
+
+static void test_snapshot_round_trip_preserves_the_setup() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(Exec_RecordFill(setup, 0, 4121.90, cfg, ev));
+  CHECK(setup.layerState[0] == EXEC_LAYER_FILLED);
+
+  ExecSnapshot snap{};
+  CHECK(Exec_TakeSnapshot(setup, snap));
+  CHECK(snap.valid);
+  CHECK(snap.phase == EXEC_MANAGING);   // a fill moves the setup to MANAGING
+  CHECK(snap.layerState[0] == EXEC_LAYER_FILLED);
+  CHECK(near(snap.fillPrice[0], 4121.90));
+
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(Exec_RestoreSnapshot(snap, restored));
+  CHECK(restored.phase == setup.phase);
+  CHECK(restored.isBuy == setup.isBuy);
+  CHECK(restored.poiRole == setup.poiRole);
+  CHECK(near(restored.poiLower, setup.poiLower));
+  CHECK(near(restored.poiUpper, setup.poiUpper));
+  CHECK(restored.poiSourceMinutes == setup.poiSourceMinutes);
+  CHECK(restored.touchTime == setup.touchTime);
+  CHECK(restored.confirmTime == setup.confirmTime);
+  CHECK(restored.confirmKind == setup.confirmKind);
+  CHECK(near(restored.entryZone.lower, setup.entryZone.lower));
+  CHECK(near(restored.entryZone.upper, setup.entryZone.upper));
+  CHECK(near(restored.initialSL, setup.initialSL));
+  CHECK(near(restored.basketRisk, setup.basketRisk));
+  for (int i = 0; i < 3; ++i) {
+    CHECK(near(restored.layers[i], setup.layers[i]));
+    CHECK(near(restored.tp[i], setup.tp[i]));
+    CHECK(near(restored.stops[i], setup.stops[i]));
+    CHECK(near(restored.slPlus[i], setup.slPlus[i]));
+    CHECK(near(restored.fillPrice[i], setup.fillPrice[i]));
+    CHECK(restored.layerState[i] == setup.layerState[i]);
+  }
+}
+
+static void test_restored_setup_still_locks_the_stop_after_tp1() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  // All three layers are filled, so the TP1 lock has to move the stops of the
+  // two surviving layers.
+  CHECK(Exec_RecordFill(setup, 0, setup.layers[0], cfg, ev));
+  CHECK(Exec_RecordFill(setup, 1, setup.layers[1], cfg, ev));
+  CHECK(Exec_RecordFill(setup, 2, setup.layers[2], cfg, ev));
+
+  ExecSnapshot snap{};
+  CHECK(Exec_TakeSnapshot(setup, snap));
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(Exec_RestoreSnapshot(snap, restored));
+
+  // The restored setup must still run the TP1 lock: E1 closes at target and
+  // the E2/E3 stops move to +10 pips from their own fills.
+  CHECK(Exec_RecordClose(restored, 0, true, ev));
+  CHECK(ev.type == EXEC_EVENT_TP1_LOCK);
+  CHECK(restored.slLocked);
+  CHECK(near(restored.stops[1], Exec_ComputeSLPlus(true, restored.fillPrice[1],
+                                                  cfg.slPlusPips)));
+  CHECK(near(restored.stops[2], Exec_ComputeSLPlus(true, restored.fillPrice[2],
+                                                  cfg.slPlusPips)));
+}
+
+static void test_restored_setup_cancels_pending_layers_on_tp1() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(Exec_RecordFill(setup, 0, setup.layers[0], cfg, ev));
+
+  ExecSnapshot snap{};
+  CHECK(Exec_TakeSnapshot(setup, snap));
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(Exec_RestoreSnapshot(snap, restored));
+
+  // E1 closes at target: the still pending layers must die.
+  CHECK(Exec_RecordClose(restored, 0, true, ev));
+  CHECK(ev.type == EXEC_EVENT_TP1_LOCK);
+  CHECK(restored.layerState[1] == EXEC_LAYER_CANCELED);
+  CHECK(restored.layerState[2] == EXEC_LAYER_CANCELED);
+}
+
+static void test_restored_setup_still_reacts_to_a_broken_poi() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  ExecSnapshot snap{};
+  CHECK(Exec_TakeSnapshot(setup, snap));
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(Exec_RestoreSnapshot(snap, restored));
+
+  // The POI breaks after the restart: the pending layers must be cancelled.
+  const std::vector<MSNRBar> w = head(bars, 7);
+  CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_BROKEN,
+                     MSNR_ROLE_SUPPORT, cfg, restored, ev));
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(ev.reason == EXEC_REASON_POI_BROKEN);
+  CHECK(restored.layerState[0] == EXEC_LAYER_CANCELED);
+}
+
+static void test_snapshot_of_an_idle_setup_is_rejected() {
+  ExecSetup setup{};
+  Exec_ClearSetup(setup);
+  ExecSnapshot snap{};
+  CHECK(!Exec_TakeSnapshot(setup, snap));
+  CHECK(!snap.valid);
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(!Exec_RestoreSnapshot(snap, restored));
+  CHECK(restored.phase == EXEC_IDLE);
+}
+
+static void test_snapshot_keeps_the_layer_states_of_a_closed_layer() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(Exec_RecordFill(setup, 0, setup.layers[0], cfg, ev));
+  CHECK(Exec_RecordClose(setup, 0, false, ev));
+  CHECK(setup.layerState[0] == EXEC_LAYER_CLOSED);
+
+  ExecSnapshot snap{};
+  CHECK(Exec_TakeSnapshot(setup, snap));
+  ExecSetup restored{};
+  Exec_ClearSetup(restored);
+  CHECK(Exec_RestoreSnapshot(snap, restored));
+  CHECK(restored.layerState[0] == EXEC_LAYER_CLOSED);
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -864,11 +1016,17 @@ int main() {
   test_arm_skips_when_basket_risk_exceeds_cap();
   test_sliding_window_still_finds_the_confirmation();
   test_sliding_window_drops_a_stale_setup();
+  test_snapshot_round_trip_preserves_the_setup();
+  test_restored_setup_still_locks_the_stop_after_tp1();
+  test_restored_setup_cancels_pending_layers_on_tp1();
+  test_restored_setup_still_reacts_to_a_broken_poi();
+  test_snapshot_of_an_idle_setup_is_rejected();
+  test_snapshot_keeps_the_layer_states_of_a_closed_layer();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("35 Exec kernel test groups passed\n");
+  std::printf("41 Exec kernel test groups passed\n");
   return 0;
 }

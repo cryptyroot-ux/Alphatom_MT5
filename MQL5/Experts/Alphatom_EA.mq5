@@ -809,6 +809,8 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
    if(produced)
      {
       EaLogEvent(isBuy, setup, ev);
+      if(ev.type == EXEC_EVENT_ARM)
+         EaWriteState();          // the state must exist before the orders go out
       EaHandleLiveEvent(isBuy, setup, ev);
      }
    else if(InpLogEvents && setup.phase == EXEC_TOUCHED && g_execCount > 0)
@@ -871,6 +873,289 @@ void EaLogHeartbeat()
                EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
   }
 
+//+------------------------------------------------------------------+
+//| Persistent state (restart recovery)                               |
+//|                                                                   |
+//| The expert stores the two setups in MQL5/Files so a terminal      |
+//| restart can rebuild them instead of leaving positions unmanaged. |
+//+------------------------------------------------------------------+
+#define EA_STATE_FILE "Alphatom_state.csv"
+
+string EaStateSide(const bool isBuy)
+  {
+   return isBuy ? "BUY" : "SELL";
+  }
+
+string EaStateRow(const bool isBuy, const ExecSetup &setup, const EaLink &link)
+  {
+   ExecSnapshot snap;
+   if(!Exec_TakeSnapshot(setup, snap))
+      return "";
+   string row = EaStateSide(isBuy);
+   row += StringFormat(",%d,%d,%d,%.5f,%.5f,%d,%I64d,%I64d,%d,%.5f,%.5f,%d",
+                       (int)snap.phase, (int)snap.isBuy, (int)snap.poiRole,
+                       snap.poiLower, snap.poiUpper, snap.poiSourceMinutes,
+                       snap.touchTime, snap.confirmTime, snap.confirmKind,
+                       snap.entryZone.lower, snap.entryZone.upper,
+                       snap.entryZone.valid ? 1 : 0);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%.5f", snap.layers[i]);
+   row += StringFormat(",%.5f", snap.initialSL);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%.5f", snap.stops[i]);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%.5f", snap.tp[i]);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%.5f", snap.slPlus[i]);
+   row += StringFormat(",%d", snap.slLocked ? 1 : 0);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%d", (int)snap.layerState[i]);
+   for(int i = 0; i < 3; ++i)
+      row += StringFormat(",%.5f", snap.fillPrice[i]);
+   row += StringFormat(",%.5f,%d,%d,%I64d,%d,%d", snap.basketRisk,
+                       snap.skipReason, link.valid ? 1 : 0, link.created,
+                       link.tfIndex, (int)link.lastState);
+   return row;
+  }
+
+void EaWriteState()
+  {
+   const int handle = FileOpen(EA_STATE_FILE, FILE_WRITE | FILE_TXT |
+                                FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+     {
+      PrintFormat("ALPHA %s state: cannot write %s (error %d)", InpInstanceTag,
+                  EA_STATE_FILE, GetLastError());
+      return;
+     }
+   FileWriteString(handle, "# alphatom state v1");
+   const string buyRow = EaStateRow(true, g_buySetup, g_buyLink);
+   if(buyRow != "")
+      FileWriteString(handle, buyRow);
+   const string sellRow = EaStateRow(false, g_sellSetup, g_sellLink);
+   if(sellRow != "")
+      FileWriteString(handle, sellRow);
+   FileClose(handle);
+  }
+
+// Parse one state row into a setup and its POI link.
+bool EaParseStateRow(const string &line, bool &outIsBuy, ExecSetup &outSetup,
+                     EaLink &outLink)
+  {
+   string parts[];
+   const int count = StringSplit(line, ',', parts);
+   if(count < 42)
+      return false;
+   if(parts[0] == "BUY")
+      outIsBuy = true;
+   else if(parts[0] == "SELL")
+      outIsBuy = false;
+   else
+      return false;
+
+   ExecSnapshot snap;
+   Exec_ClearSnapshot(snap);
+   snap.valid = true;
+   snap.phase = (ExecPhase)StringToInteger(parts[1]);
+   snap.isBuy = StringToInteger(parts[2]) != 0;
+   snap.poiRole = (MSNRRole)StringToInteger(parts[3]);
+   snap.poiLower = StringToDouble(parts[4]);
+   snap.poiUpper = StringToDouble(parts[5]);
+   snap.poiSourceMinutes = (int)StringToInteger(parts[6]);
+   snap.touchTime = StringToInteger(parts[7]);
+   snap.confirmTime = StringToInteger(parts[8]);
+   snap.confirmKind = (int)StringToInteger(parts[9]);
+   snap.entryZone.lower = StringToDouble(parts[10]);
+   snap.entryZone.upper = StringToDouble(parts[11]);
+   snap.entryZone.valid = StringToInteger(parts[12]) != 0;
+   snap.entryZone.bullish = snap.entryZone.lower < snap.entryZone.upper;
+   int index = 13;
+   for(int i = 0; i < 3; ++i)
+      snap.layers[i] = StringToDouble(parts[index++]);
+   snap.initialSL = StringToDouble(parts[index++]);
+   for(int i = 0; i < 3; ++i)
+      snap.stops[i] = StringToDouble(parts[index++]);
+   for(int i = 0; i < 3; ++i)
+      snap.tp[i] = StringToDouble(parts[index++]);
+   for(int i = 0; i < 3; ++i)
+      snap.slPlus[i] = StringToDouble(parts[index++]);
+   snap.slLocked = StringToInteger(parts[index++]) != 0;
+   for(int i = 0; i < 3; ++i)
+      snap.layerState[i] = (ExecLayerState)StringToInteger(parts[index++]);
+   for(int i = 0; i < 3; ++i)
+      snap.fillPrice[i] = StringToDouble(parts[index++]);
+   snap.basketRisk = StringToDouble(parts[index++]);
+   snap.skipReason = (int)StringToInteger(parts[index++]);
+   outLink.valid = StringToInteger(parts[index++]) != 0;
+   outLink.created = StringToInteger(parts[index++]);
+   outLink.tfIndex = (int)StringToInteger(parts[index++]);
+   outLink.lastState = (MSNRState)StringToInteger(parts[index++]);
+   return Exec_RestoreSnapshot(snap, outSetup);
+  }
+
+// Read the state file. Returns the number of restored setups.
+int EaReadState(bool &outBuyRestored, bool &outSellRestored)
+  {
+   outBuyRestored = false;
+   outSellRestored = false;
+   const int handle = FileOpen(EA_STATE_FILE, FILE_READ | FILE_TXT |
+                                FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+      return 0;
+   int restored = 0;
+   while(!FileIsEnding(handle))
+     {
+      const string line = FileReadString(handle);
+      if(StringLen(line) < 3)
+         continue;
+      if(StringGetCharacter(line, 0) == '#')
+         continue;
+      bool isBuy = false;
+      ExecSetup setup;
+      Exec_ClearSetup(setup);
+      EaLink link;
+      EaClearLink(link);
+      if(!EaParseStateRow(line, isBuy, setup, link))
+         continue;
+      if(isBuy)
+        {
+         Exec_ClearSetup(g_buySetup);
+         g_buySetup = setup;
+         g_buyLink = link;
+         outBuyRestored = true;
+        }
+      else
+        {
+         Exec_ClearSetup(g_sellSetup);
+         g_sellSetup = setup;
+         g_sellLink = link;
+         outSellRestored = true;
+        }
+      ++restored;
+     }
+   FileClose(handle);
+   return restored;
+  }
+
+
+
+// Does the broker hold an open position of this magic for that layer?
+bool EaHasOpenPosition(const bool isBuy, const int layer)
+  {
+   for(int i = 0; i < PositionsTotal(); ++i)
+     {
+      const ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      const string comment = PositionGetString(POSITION_COMMENT);
+      if((StringFind(comment, "ALPHA B L") == 0) != isBuy)
+         continue;
+      if(EaLayerFromComment(comment) != layer)
+         continue;
+      return true;
+     }
+   return false;
+  }
+
+// Does the broker hold a resting order of this magic for that layer?
+bool EaHasRestingOrder(const bool isBuy, const int layer)
+  {
+   for(int i = 0; i < OrdersTotal(); ++i)
+     {
+      const ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)
+         continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic)
+         continue;
+      const string comment = OrderGetString(ORDER_COMMENT);
+      if((StringFind(comment, "ALPHA B L") == 0) != isBuy)
+         continue;
+      if(EaLayerFromComment(comment) != layer)
+         continue;
+      return true;
+     }
+   return false;
+  }
+
+// Verify the restored state against the broker. Any position or resting
+// order that the state file does not know about means the state is stale:
+// trading must not continue in that case.
+string EaValidateSide(const bool isBuy, ExecSetup &setup,
+                      const bool restored)
+  {
+   for(int i = 0; i < PositionsTotal(); ++i)
+     {
+      const ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      const string comment = PositionGetString(POSITION_COMMENT);
+      const int layer = EaLayerFromComment(comment);
+      const bool posIsBuy = StringFind(comment, "ALPHA B L") == 0;
+      if(posIsBuy != isBuy)
+         continue;
+      if(layer < 0)
+         return "an open position carries no layer comment";
+      if(!restored)
+         return "open positions exist without a matching state file";
+      if(setup.layerState[layer] != EXEC_LAYER_FILLED)
+         return StringFormat("layer %d is open but the state file does not mark it filled",
+                             layer + 1);
+     }
+   for(int i = 0; i < OrdersTotal(); ++i)
+     {
+      const ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)
+         continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic)
+         continue;
+      const string comment = OrderGetString(ORDER_COMMENT);
+      const int layer = EaLayerFromComment(comment);
+      const bool orderIsBuy = StringFind(comment, "ALPHA B L") == 0;
+      if(orderIsBuy != isBuy)
+         continue;
+      if(layer < 0)
+         return "a resting order carries no layer comment";
+      if(!restored)
+         return "resting orders exist without a matching state file";
+      if(setup.layerState[layer] != EXEC_LAYER_PENDING)
+         return StringFormat("layer %d has a resting order but the state file does not mark it pending",
+                             layer + 1);
+     }
+   // The other way round: a layer the state calls filled must have a position,
+   // and a layer it calls pending must have a resting order.
+   for(int layer = 0; layer < 3; ++layer)
+     {
+      if(setup.layerState[layer] == EXEC_LAYER_FILLED &&
+         !EaHasOpenPosition(isBuy, layer))
+         return StringFormat("the state file marks layer %d filled but the broker has no position for it",
+                             layer + 1);
+      if(setup.layerState[layer] == EXEC_LAYER_PENDING &&
+         !EaHasRestingOrder(isBuy, layer))
+         Exec_CancelLayer(setup, layer);
+     }
+   return "";
+  }
+
+string EaValidateRecovery(const bool buyRestored, const bool sellRestored)
+  {
+   const string buyReason = EaValidateSide(true, g_buySetup, buyRestored);
+   if(buyReason != "")
+      return buyReason;
+   return EaValidateSide(false, g_sellSetup, sellRestored);
+  }
+
 void EaOnClosedBar()
   {
    EaRefreshAllPoi();
@@ -878,6 +1163,7 @@ void EaOnClosedBar()
       return;
    EaProcessDirection(true, g_buySetup, g_buyLink);
    EaProcessDirection(false, g_sellSetup, g_sellLink);
+   EaWriteState();
    ++g_closedBars;
    if(g_closedBars % 30 == 0)
       EaLogHeartbeat();
@@ -994,12 +1280,27 @@ int OnInit()
    EaClearLink(g_sellLink);
    EaBuildConfig();
 
+   // Restart recovery: rebuild the setups from the state file and check them
+   // against the broker before any order may be sent.
+   bool buyRestored = false;
+   bool sellRestored = false;
+   const int restored = EaReadState(buyRestored, sellRestored);
+   if(restored > 0)
+      PrintFormat("ALPHA %s recovery: %d setup(s) restored from %s",
+                  InpInstanceTag, restored, EA_STATE_FILE);
+
    g_liveAllowed = !InpShadowMode;
-   if(g_liveAllowed && EaCountOwnPositions() > 0)
+   if(g_liveAllowed)
      {
-      Print("ALPHA live start refused: existing positions with this magic; ",
-            "state recovery is not implemented, running shadow");
-      g_liveAllowed = false;
+      const string reason = EaValidateRecovery(buyRestored, sellRestored);
+      if(reason != "")
+        {
+         PrintFormat("ALPHA live start refused: %s; running shadow", reason);
+         g_liveAllowed = false;
+        }
+      else if(EaCountOwnPositions() > 0)
+         PrintFormat("ALPHA %s recovery: %d position(s) of this magic are managed again",
+                     InpInstanceTag, EaCountOwnPositions());
      }
 
    g_lastExecOpen = iTime(_Symbol, InpExecTimeframe, 0);
@@ -1054,6 +1355,7 @@ void EaHandleDealFill(const bool isBuy, const int layer, const double price)
         {
          EaLogEvent(true, g_buySetup, ev);
          EaLiveModifyStops(true, g_buySetup);
+         EaWriteState();
         }
      }
    else
@@ -1062,6 +1364,7 @@ void EaHandleDealFill(const bool isBuy, const int layer, const double price)
         {
          EaLogEvent(false, g_sellSetup, ev);
          EaLiveModifyStops(false, g_sellSetup);
+         EaWriteState();
         }
      }
   }
@@ -1076,6 +1379,7 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
          EaLogEvent(true, g_buySetup, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
             EaLiveModifyStops(true, g_buySetup);
+         EaWriteState();
         }
      }
    else
@@ -1085,6 +1389,7 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
          EaLogEvent(false, g_sellSetup, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
             EaLiveModifyStops(false, g_sellSetup);
+         EaWriteState();
         }
      }
   }
