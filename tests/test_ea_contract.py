@@ -123,6 +123,14 @@ class ExpertContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"risk=%.2f")
         self.assertIn("setup.basketRisk", self.source)
 
+    def test_only_one_side_may_hold_the_market(self):
+        # Owner decision 2026-10-21: while the opposite side has live orders
+        # or exposure, this side may not keep a setup.
+        self.assertIn("EaSideHoldsMarket", self.source)
+        self.assertIn("Exec_CancelForOpposite", self.source)
+        self.assertIn("EXEC_REASON_OPPOSITE", self.source)
+        self.assertRegex(self.source, r"OPPOSITE")
+
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 

@@ -475,7 +475,8 @@ enum ExecReason
    EXEC_REASON_RISK_CAP = 5,
    EXEC_REASON_TP1 = 6,
    EXEC_REASON_CONFIG = 7,
-   EXEC_REASON_STALE = 8
+   EXEC_REASON_STALE = 8,
+   EXEC_REASON_OPPOSITE = 9
   };
 
 enum ExecConfirmKind
@@ -795,6 +796,26 @@ int Exec_CancelPending(ExecSetup &setup)
          ++count;
         }
    return count;
+  }
+
+// Owner decision 2026-10-21: only one direction may hold live orders or
+// exposure at a time. When the opposite direction is in charge, a waiting
+// setup is cancelled. A setup that already carries exposure is never
+// cancelled this way: that money has to be managed to its target or stop.
+bool Exec_CancelForOpposite(ExecSetup &setup, ExecEvent &outEvent)
+  {
+   Exec_ClearEvent(outEvent);
+   if(!Exec_IsActive(setup))
+      return false;
+   if(Exec_CountFilled(setup) > 0)
+      return false;
+   Exec_CancelPending(setup);
+   setup.phase = EXEC_CANCELED;
+   setup.skipReason = EXEC_REASON_OPPOSITE;
+   outEvent.type = EXEC_EVENT_CANCEL;
+   outEvent.phase = setup.phase;
+   outEvent.reason = EXEC_REASON_OPPOSITE;
+   return true;
   }
 
 int Exec_PoiCancelReason(const ExecSetup &setup,

@@ -192,6 +192,8 @@ string EaReasonName(const int reason)
       return "CONFIG";
    if(reason == EXEC_REASON_STALE)
       return "STALE";
+   if(reason == EXEC_REASON_OPPOSITE)
+      return "OPPOSITE";
    return "UNKNOWN";
   }
 
@@ -776,11 +778,26 @@ void EaLiveModifyStops(const bool isBuy, const ExecSetup &setup)
      }
   }
 
-void EaHandleLiveEvent(const bool isBuy, const ExecSetup &setup,
+void EaHandleLiveEvent(const bool isBuy, ExecSetup &setup,
                        const ExecEvent &ev)
   {
    if(ev.type == EXEC_EVENT_ARM)
+     {
+      // The opposite side may have taken the market between the check and
+      // the arming bar: stand down instead of opening a second basket.
+      if(EaSideHoldsMarket(!isBuy))
+        {
+         ExecEvent cancelEvent;
+         if(Exec_CancelForOpposite(setup, cancelEvent))
+           {
+            EaLogEvent(isBuy, setup, cancelEvent);
+            EaLiveCancelPendings(isBuy, setup);
+            EaWriteState();
+           }
+         return;
+        }
       EaLivePlaceBasket(isBuy, setup);
+     }
    else if(ev.type == EXEC_EVENT_CANCEL || ev.type == EXEC_EVENT_SKIP ||
            ev.type == EXEC_EVENT_DONE)
       EaLiveCancelPendings(isBuy, setup);
@@ -789,8 +806,51 @@ void EaHandleLiveEvent(const bool isBuy, const ExecSetup &setup,
 //+------------------------------------------------------------------+
 //| Direction step                                                   |
 //+------------------------------------------------------------------+
+// Does this side hold the market? Either it has live orders resting at the
+// broker (pending layers) or it carries exposure (filled layers). Owner
+// decision 2026-10-21: only one side may hold the market at a time, so a
+// whipsaw can never open a basket on both sides.
+bool EaSideHoldsMarket(const bool isBuy)
+  {
+   if(isBuy)
+     {
+      if(g_sellSetup.phase != EXEC_ARMED && g_sellSetup.phase != EXEC_MANAGING)
+         return false;
+      for(int i = 0; i < 3; ++i)
+         if(g_sellSetup.layerState[i] == EXEC_LAYER_FILLED ||
+            g_sellSetup.layerState[i] == EXEC_LAYER_PENDING)
+            return true;
+      return false;
+     }
+   if(g_buySetup.phase != EXEC_ARMED && g_buySetup.phase != EXEC_MANAGING)
+      return false;
+   for(int i = 0; i < 3; ++i)
+      if(g_buySetup.layerState[i] == EXEC_LAYER_FILLED ||
+         g_buySetup.layerState[i] == EXEC_LAYER_PENDING)
+         return true;
+   return false;
+  }
+
 void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
   {
+   // One side at a time: while the opposite side holds the market, this
+   // side may not keep a setup.
+   if(EaSideHoldsMarket(!isBuy))
+     {
+      if(Exec_IsActive(setup))
+        {
+         ExecEvent cancelEvent;
+         if(Exec_CancelForOpposite(setup, cancelEvent))
+           {
+            EaLogEvent(isBuy, setup, cancelEvent);
+            EaHandleLiveEvent(isBuy, setup, cancelEvent);
+            EaClearLink(link);
+            EaWriteState();
+           }
+        }
+      return;
+     }
+
    if(!Exec_IsActive(setup))
      {
       EaTryStartSetup(isBuy, setup, link);

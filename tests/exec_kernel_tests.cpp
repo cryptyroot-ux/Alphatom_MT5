@@ -980,6 +980,55 @@ static void test_snapshot_keeps_the_layer_states_of_a_closed_layer() {
   CHECK(restored.layerState[0] == EXEC_LAYER_CLOSED);
 }
 
+
+// --- Task 8: one side at a time --------------------------------------------
+//
+// Owner decision 2026-10-21: while one direction holds live orders or
+// exposure, the opposite direction may not keep a setup. This keeps a
+// whipsaw from opening a basket on both sides.
+
+static void test_cancel_for_opposite_stops_the_setup() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+
+  // The opposite side takes exposure: the waiting setup must die.
+  CHECK(Exec_CancelForOpposite(setup, ev));
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(ev.reason == EXEC_REASON_OPPOSITE);
+  CHECK(setup.phase == EXEC_CANCELED);
+  CHECK(setup.skipReason == EXEC_REASON_OPPOSITE);
+  CHECK(setup.layerState[0] == EXEC_LAYER_CANCELED);
+  CHECK(setup.layerState[1] == EXEC_LAYER_CANCELED);
+  CHECK(setup.layerState[2] == EXEC_LAYER_CANCELED);
+  CHECK(!Exec_IsActive(setup));
+}
+
+static void test_cancel_for_opposite_keeps_a_filled_layer_alive() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(Exec_RecordFill(setup, 0, setup.layers[0], cfg, ev));
+
+  // A setup that already carries exposure must not be cancelled: the money
+  // is at risk and the layer has to be managed to its target or stop.
+  CHECK(!Exec_CancelForOpposite(setup, ev));
+  CHECK(setup.phase == EXEC_MANAGING);
+  CHECK(setup.layerState[0] == EXEC_LAYER_FILLED);
+}
+
+static void test_cancel_for_opposite_ignores_an_idle_setup() {
+  ExecSetup setup{};
+  Exec_ClearSetup(setup);
+  ExecEvent ev{};
+  CHECK(!Exec_CancelForOpposite(setup, ev));
+  CHECK(setup.phase == EXEC_IDLE);
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -1022,11 +1071,14 @@ int main() {
   test_restored_setup_still_reacts_to_a_broken_poi();
   test_snapshot_of_an_idle_setup_is_rejected();
   test_snapshot_keeps_the_layer_states_of_a_closed_layer();
+  test_cancel_for_opposite_stops_the_setup();
+  test_cancel_for_opposite_keeps_a_filled_layer_alive();
+  test_cancel_for_opposite_ignores_an_idle_setup();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("41 Exec kernel test groups passed\n");
+  std::printf("44 Exec kernel test groups passed\n");
   return 0;
 }
