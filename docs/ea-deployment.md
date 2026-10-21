@@ -66,7 +66,35 @@ systemctl start mt5-terminal.service
 | M1/M2/M3 history | 750 000 bars each | all three execution timeframes are usable |
 | Server time | WIB − 4 h | the daily break is 23:59 → 01:00 server |
 
-## 5. Live order path (what happens on ARM)
+## 5. Restart recovery
+
+The expert persists both setups in `MQL5/Files/Alphatom_state.csv` (one CSV row
+per direction, 39 columns, a shared index table for the writer and the parser).
+The state is written
+
+* right before the basket goes out (so a crash between the write and the
+  order still leaves a consistent state),
+* on every closed bar,
+* on every fill and close.
+
+On start the state is read back and validated against the broker in **both**
+directions:
+
+| Situation | Result |
+|-----------|--------|
+| the state matches the broker | the setup is restored and managed again, live continues |
+| an open position or a resting order of this magic is not in the state | live is **refused**, the expert falls back to shadow |
+| the state calls a layer filled but the broker has no position for it | live is **refused** (the state is stale) |
+| the state calls a layer pending but the order is gone | the layer is cancelled and the setup continues with the remaining layers |
+
+The state file is written by the expert, so **do not edit it while the terminal
+runs**; the next write overwrites it. A restart therefore reads the file that
+the previous run left behind.
+
+Markers in the log: `recovery: N setup(s) restored`, `live start refused: ...;
+running shadow`.
+
+## 6. Live order path (what happens on ARM)
 
 1. The arming bar closes → the basket is placed.
 2. A layer whose price is already at/beyond the market cannot rest as a limit:
@@ -83,12 +111,13 @@ Orders carry magic `20261021`. A live start with existing positions of this
 magic is refused and downgraded to shadow, because restart recovery is not
 implemented yet.
 
-## 6. Diagnostics
+## 7. Diagnostics
 
 * Log: `MQL5/logs/YYYYMMDD.log` in the terminal data folder (UTF-16LE).
   Useful markers: `HEARTBEAT` (liveness + fresh/unfresh/broken POI counts),
   `WAIT` (setup waiting for its confirmation), `ORDER_PLACED` / `ORDER_MARKET`
-  (basket sent), `ORDER_FAIL` (rejected, with the retcode).
+  (basket sent), `ORDER_FAIL` (rejected, with the retcode), `recovery:` and
+  `live start refused:` (restart recovery).
 * Runtime probe report: `MQL5/Files/Alphatom_runtime_report.csv`.
 * Bar export for the offline replay: `MQL5/Files/BEX_m1.csv`,
   `MQL5/Files/BEX_poi.csv` (regenerate with `AlphatomBarsExport`).

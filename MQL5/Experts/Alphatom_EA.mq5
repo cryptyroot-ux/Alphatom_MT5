@@ -85,6 +85,7 @@ EaLink    g_sellLink;
 ExecConfig g_cfg;
 
 bool g_liveAllowed = false;
+bool g_stateWarned = false;
 int  g_closedBars = 0;
 
 //+------------------------------------------------------------------+
@@ -881,6 +882,38 @@ void EaLogHeartbeat()
 //+------------------------------------------------------------------+
 #define EA_STATE_FILE "Alphatom_state.csv"
 
+// The persisted state row: one row per direction. The column indexes are
+// shared by the writer and the parser, and the field count is verified at
+// runtime, so a format change can never fail silently.
+#define EA_STATE_FIELDS 39
+#define EA_ST_SIDE       0
+#define EA_ST_PHASE      1
+#define EA_ST_ISBUY      2
+#define EA_ST_POIREL     3
+#define EA_ST_POILOW     4
+#define EA_ST_POIUP      5
+#define EA_ST_POIMIN     6
+#define EA_ST_TOUCHTIME  7
+#define EA_ST_CONFIRMT   8
+#define EA_ST_CONFIRMK   9
+#define EA_ST_ENTLOW     10
+#define EA_ST_ENTUP      11
+#define EA_ST_ENTVALID   12
+#define EA_ST_LAYERS     13   // 13,14,15
+#define EA_ST_SL         16
+#define EA_ST_STOPS      17   // 17,18,19
+#define EA_ST_TP         20   // 20,21,22
+#define EA_ST_SLPLUS     23   // 23,24,25
+#define EA_ST_SLLOCK     26
+#define EA_ST_LAYERSTATE 27   // 27,28,29
+#define EA_ST_FILL       30   // 30,31,32
+#define EA_ST_RISK       33
+#define EA_ST_SKIP       34
+#define EA_ST_LINKOK     35
+#define EA_ST_LINKCREATE 36
+#define EA_ST_LINKTF     37
+#define EA_ST_LINKSTATE  38
+
 string EaStateSide(const bool isBuy)
   {
    return isBuy ? "BUY" : "SELL";
@@ -891,30 +924,51 @@ string EaStateRow(const bool isBuy, const ExecSetup &setup, const EaLink &link)
    ExecSnapshot snap;
    if(!Exec_TakeSnapshot(setup, snap))
       return "";
-   string row = EaStateSide(isBuy);
-   row += StringFormat(",%d,%d,%d,%.5f,%.5f,%d,%I64d,%I64d,%d,%.5f,%.5f,%d",
-                       (int)snap.phase, (int)snap.isBuy, (int)snap.poiRole,
-                       snap.poiLower, snap.poiUpper, snap.poiSourceMinutes,
-                       snap.touchTime, snap.confirmTime, snap.confirmKind,
-                       snap.entryZone.lower, snap.entryZone.upper,
-                       snap.entryZone.valid ? 1 : 0);
+   string fields[EA_STATE_FIELDS];
+   int n = 0;
+   fields[n++] = EaStateSide(isBuy);
+   fields[n++] = IntegerToString((int)snap.phase);
+   fields[n++] = IntegerToString(snap.isBuy ? 1 : 0);
+   fields[n++] = IntegerToString((int)snap.poiRole);
+   fields[n++] = DoubleToString(snap.poiLower, 5);
+   fields[n++] = DoubleToString(snap.poiUpper, 5);
+   fields[n++] = IntegerToString(snap.poiSourceMinutes);
+   fields[n++] = IntegerToString(snap.touchTime);
+   fields[n++] = IntegerToString(snap.confirmTime);
+   fields[n++] = IntegerToString(snap.confirmKind);
+   fields[n++] = DoubleToString(snap.entryZone.lower, 5);
+   fields[n++] = DoubleToString(snap.entryZone.upper, 5);
+   fields[n++] = IntegerToString(snap.entryZone.valid ? 1 : 0);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%.5f", snap.layers[i]);
-   row += StringFormat(",%.5f", snap.initialSL);
+      fields[n++] = DoubleToString(snap.layers[i], 5);
+   fields[n++] = DoubleToString(snap.initialSL, 5);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%.5f", snap.stops[i]);
+      fields[n++] = DoubleToString(snap.stops[i], 5);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%.5f", snap.tp[i]);
+      fields[n++] = DoubleToString(snap.tp[i], 5);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%.5f", snap.slPlus[i]);
-   row += StringFormat(",%d", snap.slLocked ? 1 : 0);
+      fields[n++] = DoubleToString(snap.slPlus[i], 5);
+   fields[n++] = IntegerToString(snap.slLocked ? 1 : 0);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%d", (int)snap.layerState[i]);
+      fields[n++] = IntegerToString((int)snap.layerState[i]);
    for(int i = 0; i < 3; ++i)
-      row += StringFormat(",%.5f", snap.fillPrice[i]);
-   row += StringFormat(",%.5f,%d,%d,%I64d,%d,%d", snap.basketRisk,
-                       snap.skipReason, link.valid ? 1 : 0, link.created,
-                       link.tfIndex, (int)link.lastState);
+      fields[n++] = DoubleToString(snap.fillPrice[i], 5);
+   fields[n++] = DoubleToString(snap.basketRisk, 5);
+   fields[n++] = IntegerToString(snap.skipReason);
+   fields[n++] = IntegerToString(link.valid ? 1 : 0);
+   fields[n++] = IntegerToString(link.created);
+   fields[n++] = IntegerToString(link.tfIndex);
+   fields[n++] = IntegerToString((int)link.lastState);
+
+   if(n != EA_STATE_FIELDS)
+     {
+      PrintFormat("ALPHA %s state: field count mismatch (%d != %d)", InpInstanceTag,
+                  n, EA_STATE_FIELDS);
+      return "";
+     }
+   string row = fields[0];
+   for(int i = 1; i < n; ++i)
+      row += "," + fields[i];
    return row;
   }
 
@@ -928,14 +982,21 @@ void EaWriteState()
                   EA_STATE_FILE, GetLastError());
       return;
      }
-   FileWriteString(handle, "# alphatom state v1");
+   FileWriteString(handle, "# alphatom state v1\r\n");
    const string buyRow = EaStateRow(true, g_buySetup, g_buyLink);
    if(buyRow != "")
-      FileWriteString(handle, buyRow);
+      FileWriteString(handle, buyRow + "\r\n");
    const string sellRow = EaStateRow(false, g_sellSetup, g_sellLink);
    if(sellRow != "")
-      FileWriteString(handle, sellRow);
+      FileWriteString(handle, sellRow + "\r\n");
    FileClose(handle);
+   if(buyRow == "" && sellRow == "" && !g_stateWarned)
+     {
+      g_stateWarned = true;
+      PrintFormat("ALPHA %s state: no row written although buy=%s sell=%s",
+                  InpInstanceTag, EaPhaseName(g_buySetup.phase),
+                  EaPhaseName(g_sellSetup.phase));
+     }
   }
 
 // Parse one state row into a setup and its POI link.
@@ -944,11 +1005,11 @@ bool EaParseStateRow(const string &line, bool &outIsBuy, ExecSetup &outSetup,
   {
    string parts[];
    const int count = StringSplit(line, ',', parts);
-   if(count < 42)
+   if(count != EA_STATE_FIELDS)
       return false;
-   if(parts[0] == "BUY")
+   if(parts[EA_ST_SIDE] == "BUY")
       outIsBuy = true;
-   else if(parts[0] == "SELL")
+   else if(parts[EA_ST_SIDE] == "SELL")
       outIsBuy = false;
    else
       return false;
@@ -956,40 +1017,39 @@ bool EaParseStateRow(const string &line, bool &outIsBuy, ExecSetup &outSetup,
    ExecSnapshot snap;
    Exec_ClearSnapshot(snap);
    snap.valid = true;
-   snap.phase = (ExecPhase)StringToInteger(parts[1]);
-   snap.isBuy = StringToInteger(parts[2]) != 0;
-   snap.poiRole = (MSNRRole)StringToInteger(parts[3]);
-   snap.poiLower = StringToDouble(parts[4]);
-   snap.poiUpper = StringToDouble(parts[5]);
-   snap.poiSourceMinutes = (int)StringToInteger(parts[6]);
-   snap.touchTime = StringToInteger(parts[7]);
-   snap.confirmTime = StringToInteger(parts[8]);
-   snap.confirmKind = (int)StringToInteger(parts[9]);
-   snap.entryZone.lower = StringToDouble(parts[10]);
-   snap.entryZone.upper = StringToDouble(parts[11]);
-   snap.entryZone.valid = StringToInteger(parts[12]) != 0;
+   snap.phase = (ExecPhase)StringToInteger(parts[EA_ST_PHASE]);
+   snap.isBuy = StringToInteger(parts[EA_ST_ISBUY]) != 0;
+   snap.poiRole = (MSNRRole)StringToInteger(parts[EA_ST_POIREL]);
+   snap.poiLower = StringToDouble(parts[EA_ST_POILOW]);
+   snap.poiUpper = StringToDouble(parts[EA_ST_POIUP]);
+   snap.poiSourceMinutes = (int)StringToInteger(parts[EA_ST_POIMIN]);
+   snap.touchTime = StringToInteger(parts[EA_ST_TOUCHTIME]);
+   snap.confirmTime = StringToInteger(parts[EA_ST_CONFIRMT]);
+   snap.confirmKind = (int)StringToInteger(parts[EA_ST_CONFIRMK]);
+   snap.entryZone.lower = StringToDouble(parts[EA_ST_ENTLOW]);
+   snap.entryZone.upper = StringToDouble(parts[EA_ST_ENTUP]);
+   snap.entryZone.valid = StringToInteger(parts[EA_ST_ENTVALID]) != 0;
    snap.entryZone.bullish = snap.entryZone.lower < snap.entryZone.upper;
-   int index = 13;
    for(int i = 0; i < 3; ++i)
-      snap.layers[i] = StringToDouble(parts[index++]);
-   snap.initialSL = StringToDouble(parts[index++]);
+      snap.layers[i] = StringToDouble(parts[EA_ST_LAYERS + i]);
+   snap.initialSL = StringToDouble(parts[EA_ST_SL]);
    for(int i = 0; i < 3; ++i)
-      snap.stops[i] = StringToDouble(parts[index++]);
+      snap.stops[i] = StringToDouble(parts[EA_ST_STOPS + i]);
    for(int i = 0; i < 3; ++i)
-      snap.tp[i] = StringToDouble(parts[index++]);
+      snap.tp[i] = StringToDouble(parts[EA_ST_TP + i]);
    for(int i = 0; i < 3; ++i)
-      snap.slPlus[i] = StringToDouble(parts[index++]);
-   snap.slLocked = StringToInteger(parts[index++]) != 0;
+      snap.slPlus[i] = StringToDouble(parts[EA_ST_SLPLUS + i]);
+   snap.slLocked = StringToInteger(parts[EA_ST_SLLOCK]) != 0;
    for(int i = 0; i < 3; ++i)
-      snap.layerState[i] = (ExecLayerState)StringToInteger(parts[index++]);
+      snap.layerState[i] = (ExecLayerState)StringToInteger(parts[EA_ST_LAYERSTATE + i]);
    for(int i = 0; i < 3; ++i)
-      snap.fillPrice[i] = StringToDouble(parts[index++]);
-   snap.basketRisk = StringToDouble(parts[index++]);
-   snap.skipReason = (int)StringToInteger(parts[index++]);
-   outLink.valid = StringToInteger(parts[index++]) != 0;
-   outLink.created = StringToInteger(parts[index++]);
-   outLink.tfIndex = (int)StringToInteger(parts[index++]);
-   outLink.lastState = (MSNRState)StringToInteger(parts[index++]);
+      snap.fillPrice[i] = StringToDouble(parts[EA_ST_FILL + i]);
+   snap.basketRisk = StringToDouble(parts[EA_ST_RISK]);
+   snap.skipReason = (int)StringToInteger(parts[EA_ST_SKIP]);
+   outLink.valid = StringToInteger(parts[EA_ST_LINKOK]) != 0;
+   outLink.created = StringToInteger(parts[EA_ST_LINKCREATE]);
+   outLink.tfIndex = (int)StringToInteger(parts[EA_ST_LINKTF]);
+   outLink.lastState = (MSNRState)StringToInteger(parts[EA_ST_LINKSTATE]);
    return Exec_RestoreSnapshot(snap, outSetup);
   }
 
@@ -1003,30 +1063,35 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
    if(handle == INVALID_HANDLE)
       return 0;
    int restored = 0;
+   int rows = 0;
    while(!FileIsEnding(handle))
      {
-      const string line = FileReadString(handle);
+      string line = FileReadString(handle);
+      StringTrimRight(line);
       if(StringLen(line) < 3)
          continue;
       if(StringGetCharacter(line, 0) == '#')
          continue;
+      ++rows;
       bool isBuy = false;
       ExecSetup setup;
       Exec_ClearSetup(setup);
       EaLink link;
       EaClearLink(link);
       if(!EaParseStateRow(line, isBuy, setup, link))
+        {
+         PrintFormat("ALPHA %s state: cannot parse a row of %s", InpInstanceTag,
+                     EA_STATE_FILE);
          continue;
+        }
       if(isBuy)
         {
-         Exec_ClearSetup(g_buySetup);
          g_buySetup = setup;
          g_buyLink = link;
          outBuyRestored = true;
         }
       else
         {
-         Exec_ClearSetup(g_sellSetup);
          g_sellSetup = setup;
          g_sellLink = link;
          outSellRestored = true;
@@ -1034,10 +1099,11 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
       ++restored;
      }
    FileClose(handle);
+   if(restored == 0 && rows > 0)
+      PrintFormat("ALPHA %s state: %s holds %d row(s) but none could be restored",
+                  InpInstanceTag, EA_STATE_FILE, rows);
    return restored;
   }
-
-
 
 // Does the broker hold an open position of this magic for that layer?
 bool EaHasOpenPosition(const bool isBuy, const int layer)
@@ -1286,8 +1352,9 @@ int OnInit()
    bool sellRestored = false;
    const int restored = EaReadState(buyRestored, sellRestored);
    if(restored > 0)
-      PrintFormat("ALPHA %s recovery: %d setup(s) restored from %s",
-                  InpInstanceTag, restored, EA_STATE_FILE);
+      PrintFormat("ALPHA %s recovery: %d setup(s) restored from %s (buy=%s sell=%s)",
+                  InpInstanceTag, restored, EA_STATE_FILE,
+                  EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
 
    g_liveAllowed = !InpShadowMode;
    if(g_liveAllowed)
