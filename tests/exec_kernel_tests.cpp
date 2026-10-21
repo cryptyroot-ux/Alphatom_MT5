@@ -721,6 +721,113 @@ static void test_arm_skips_when_basket_risk_exceeds_cap() {
   CHECK(setup.phase == EXEC_CANCELED);
 }
 
+
+// --- Regression: a sliding bar window must not hide the confirmation ------
+//
+// A live expert re-copies the last N closed bars on every new bar, so the
+// window has a FIXED size and slides: every stored index shifts by one. The
+// kernel anchors the setup on bar TIMES, so a confirmation after the touch
+// must still be found.
+
+static std::vector<MSNRBar> withTimes(const std::vector<MSNRBar> &bars) {
+  std::vector<MSNRBar> out = bars;
+  for (size_t i = 0; i < out.size(); ++i) {
+    out[i].time = static_cast<long>(1700000000 + static_cast<long>(i) * 60);
+  }
+  return out;
+}
+
+// The window [start, start+size-1] of a logical series: the live copy
+// pattern - a fixed-size window that slides over the history.
+static std::vector<MSNRBar> window(const std::vector<MSNRBar> &bars, int start,
+                                    int size) {
+  return std::vector<MSNRBar>(bars.begin() + start,
+                               bars.begin() + start + size);
+}
+
+static std::vector<MSNRBar> slidingSeries() {
+  // Ten quiet bars, then the standard buy sequence: touch at index 10, CISD
+  // confirmation at index 15, retest at index 16.
+  std::vector<MSNRBar> bars;
+  for (int i = 0; i < 10; ++i) {
+    bars.push_back(bar(4121.50, 4121.60, 4121.40, 4121.50));
+  }
+  const std::vector<MSNRBar> tail = buySeries();
+  bars.insert(bars.end(), tail.begin(), tail.end());
+  return bars;
+}
+
+static void test_sliding_window_still_finds_the_confirmation() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> timed = withTimes(slidingSeries());
+  const int size = 11;
+
+  ExecSetup setup{};
+  ExecEvent ev{};
+
+  // Step 1: the touch bar is the newest bar of the window.
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  {
+    const std::vector<MSNRBar> w = window(timed, 0, size);
+    CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_FRESH,
+                       MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(ev.type == EXEC_EVENT_TOUCH);
+    CHECK(setup.touchIndex == 10);
+  }
+
+  // Steps 2-5: the window slides; the touch bar moves left but the setup
+  // must stay alive and must not confirm early.
+  for (int start = 1; start <= 4; ++start) {
+    const std::vector<MSNRBar> w = window(timed, start, size);
+    CHECK(!Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_UNFRESH,
+                        MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(setup.phase == EXEC_TOUCHED);
+  }
+
+  // Step 6: the confirmation bar (index 15) enters the window.
+  {
+    const std::vector<MSNRBar> w = window(timed, 5, size);
+    CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_UNFRESH,
+                       MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(ev.type == EXEC_EVENT_CONFIRM);
+    CHECK(setup.confirmIndex == 10);
+  }
+
+  // Step 7: the window slides again; the retest bar arms the basket.
+  {
+    const std::vector<MSNRBar> w = window(timed, 6, size);
+    CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_UNFRESH,
+                       MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(ev.type == EXEC_EVENT_ARM);
+    CHECK(setup.phase == EXEC_ARMED);
+  }
+}
+
+static void test_sliding_window_drops_a_stale_setup() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> timed = withTimes(slidingSeries());
+  const int size = 11;
+
+  ExecSetup setup{};
+  ExecEvent ev{};
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  {
+    const std::vector<MSNRBar> w = window(timed, 0, size);
+    CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_FRESH,
+                       MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(ev.type == EXEC_EVENT_TOUCH);
+  }
+  // The touch bar leaves the window: the setup can no longer be evaluated.
+  {
+    const std::vector<MSNRBar> w = window(timed, 11, size);
+    CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_UNFRESH,
+                       MSNR_ROLE_SUPPORT, cfg, setup, ev));
+    CHECK(ev.type == EXEC_EVENT_CANCEL);
+    CHECK(ev.reason == EXEC_REASON_STALE);
+    CHECK(setup.phase == EXEC_CANCELED);
+  }
+}
+
 int main() {
   test_ifvg_requires_close_through_far_boundary();
   test_ifvg_ignores_wick_only_break();
@@ -755,11 +862,13 @@ int main() {
   test_one_active_setup_per_direction();
   test_arm_skips_when_stop_not_beyond_far_entry();
   test_arm_skips_when_basket_risk_exceeds_cap();
+  test_sliding_window_still_finds_the_confirmation();
+  test_sliding_window_drops_a_stale_setup();
 
   if (failures > 0) {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("33 Exec kernel test groups passed\n");
+  std::printf("35 Exec kernel test groups passed\n");
   return 0;
 }

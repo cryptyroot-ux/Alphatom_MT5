@@ -208,6 +208,7 @@ bool Exec_FindTouchChain(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
    return found;
   }
 
+
 // ---------------------------------------------------------------------------
 // Task 2: entry zone, layer placement, shared stop, targets and basket risk.
 // All distances are in PRICE units; the expert turns them into points.
@@ -473,7 +474,8 @@ enum ExecReason
    EXEC_REASON_SL_INVALID = 4,
    EXEC_REASON_RISK_CAP = 5,
    EXEC_REASON_TP1 = 6,
-   EXEC_REASON_CONFIG = 7
+   EXEC_REASON_CONFIG = 7,
+   EXEC_REASON_STALE = 8
   };
 
 enum ExecConfirmKind
@@ -662,6 +664,57 @@ int Exec_PoiCancelReason(const ExecSetup &setup,
   }
 
 // One closed-bar step. Returns true when an event was produced.
+// Resolve a stored bar index against the CURRENT bar window. A live expert
+// re-copies the last N closed bars on every new bar, so the window slides and
+// every stored index shifts by one. Bar times are stable anchors, so they are
+// used whenever the setup carries one; a stored index is only a fallback for
+// callers that do not stamp bar times.
+int Exec_IndexOfTime(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
+                     const int count,
+                     const long time)
+  {
+   if(count != MSNR_ARRAY_SIZE(bars) || count <= 0 || time <= 0)
+      return -1;
+   for(int i = 0; i < count; ++i)
+     {
+      const long barTime = MSNR_ARRAY_ELEMENT(bars, i).time;
+      if(barTime == time)
+         return i;
+      if(barTime > time)
+         break;   // bars are time-ordered
+     }
+   return -1;
+  }
+
+// Re-anchor a setup on the current window. Returns false when an anchor bar
+// has left the window: the setup can no longer be evaluated and is dropped.
+bool Exec_ResolveAnchors(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
+                          const int count,
+                          ExecSetup &setup,
+                          int &outTouchIndex,
+                          int &outConfirmIndex)
+  {
+   outTouchIndex = setup.touchIndex;
+   outConfirmIndex = setup.confirmIndex;
+   if(setup.touchTime > 0)
+     {
+      const int resolved = Exec_IndexOfTime(bars, count, setup.touchTime);
+      if(resolved < 0)
+         return false;
+      outTouchIndex = resolved;
+      setup.touchIndex = resolved;
+     }
+   if(setup.confirmTime > 0)
+     {
+      const int resolved = Exec_IndexOfTime(bars, count, setup.confirmTime);
+      if(resolved < 0)
+         return false;
+      outConfirmIndex = resolved;
+      setup.confirmIndex = resolved;
+     }
+   return true;
+  }
+
 bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
                   const int execCount,
                   const MSNRState poiState,
@@ -715,6 +768,21 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
          return true;
         }
 
+      int resolvedTouch = setup.touchIndex;
+      int resolvedConfirm = setup.confirmIndex;
+      if(!Exec_ResolveAnchors(execBars, execCount, setup, resolvedTouch,
+                               resolvedConfirm))
+        {
+         setup.phase = EXEC_CANCELED;
+         setup.skipReason = EXEC_REASON_STALE;
+         outEvent.type = EXEC_EVENT_CANCEL;
+         outEvent.phase = setup.phase;
+         outEvent.barIndex = lastIndex;
+         outEvent.time = last.time;
+         outEvent.reason = EXEC_REASON_STALE;
+         return true;
+        }
+
       MSNRZone ifvgZone;
       ifvgZone.valid = false;
       int ifvgIndex = -1;
@@ -722,7 +790,7 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
       const MSNRRole wantedRole = setup.isBuy ? MSNR_ROLE_SUPPORT :
                                                MSNR_ROLE_RESISTANCE;
       const bool hasIfvg = Exec_DetectIFVG(execBars, execCount,
-                                           setup.touchIndex, wantedRole,
+                                           resolvedTouch, wantedRole,
                                            0.0, 0.0, ifvgZone, ifvgIndex,
                                            ifvgTime);
 
@@ -731,7 +799,7 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
       int cisdIndex = -1;
       long cisdTime = 0;
       const bool hasCisd = Exec_DetectCISD(execBars, execCount,
-                                           setup.touchIndex,
+                                           resolvedTouch,
                                            config.cisdMinRun, setup.isBuy,
                                            anchor, anchorIndex, cisdIndex,
                                            cisdTime);
@@ -805,8 +873,23 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
          return true;
         }
 
+      int touchIndex = setup.touchIndex;
+      int resolvedConfirm = setup.confirmIndex;
+      if(!Exec_ResolveAnchors(execBars, execCount, setup, touchIndex,
+                               resolvedConfirm))
+        {
+         setup.phase = EXEC_CANCELED;
+         setup.skipReason = EXEC_REASON_STALE;
+         outEvent.type = EXEC_EVENT_CANCEL;
+         outEvent.phase = setup.phase;
+         outEvent.barIndex = lastIndex;
+         outEvent.time = last.time;
+         outEvent.reason = EXEC_REASON_STALE;
+         return true;
+        }
+
       // The retest bar must be strictly later than the confirmation bar.
-      if(lastIndex <= setup.confirmIndex)
+      if(lastIndex <= resolvedConfirm)
          return false;
 
       double e1 = 0.0;
@@ -831,9 +914,9 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
 
       // D-1: the stop anchor spans every candle from the first POI touch to
       // the arming bar, not just the retest candle.
-      double windowLow = MSNR_ARRAY_ELEMENT(execBars, setup.touchIndex).low;
-      double windowHigh = MSNR_ARRAY_ELEMENT(execBars, setup.touchIndex).high;
-      for(int i = setup.touchIndex + 1; i <= lastIndex; ++i)
+      double windowLow = MSNR_ARRAY_ELEMENT(execBars, touchIndex).low;
+      double windowHigh = MSNR_ARRAY_ELEMENT(execBars, touchIndex).high;
+      for(int i = touchIndex + 1; i <= lastIndex; ++i)
         {
          if(MSNR_ARRAY_ELEMENT(execBars, i).low < windowLow)
             windowLow = MSNR_ARRAY_ELEMENT(execBars, i).low;

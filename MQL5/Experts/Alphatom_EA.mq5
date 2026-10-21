@@ -170,6 +170,29 @@ void EaClearLink(EaLink &link)
    link.lastState = MSNR_STATE_FRESH;
   }
 
+string EaReasonName(const int reason)
+  {
+   if(reason == EXEC_REASON_NONE)
+      return "NONE";
+   if(reason == EXEC_REASON_POI_BROKEN)
+      return "POI_BROKEN";
+   if(reason == EXEC_REASON_ROLE_FLIP)
+      return "ROLE_FLIP";
+   if(reason == EXEC_REASON_ZONE_INVALID)
+      return "ZONE_INVALID";
+   if(reason == EXEC_REASON_SL_INVALID)
+      return "SL_INVALID";
+   if(reason == EXEC_REASON_RISK_CAP)
+      return "RISK_CAP";
+   if(reason == EXEC_REASON_TP1)
+      return "TP1";
+   if(reason == EXEC_REASON_CONFIG)
+      return "CONFIG";
+   if(reason == EXEC_REASON_STALE)
+      return "STALE";
+   return "UNKNOWN";
+  }
+
 string EaEventName(const ExecEventType type)
   {
    if(type == EXEC_EVENT_TOUCH)
@@ -218,7 +241,9 @@ bool EaLiveEnabled()
    return !InpShadowMode && g_liveAllowed;
   }
 
-ENUM_ORDER_TYPE_FILLING EaMarketFilling()
+// The broker advertises which filling policies it accepts (SYMBOL_FILLING_MODE).
+// HFM Cent only allows FOK, so a hard-coded RETURN would be rejected.
+ENUM_ORDER_TYPE_FILLING EaFillingMode()
   {
    const long modes = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
    if((modes & SYMBOL_FILLING_FOK) != 0)
@@ -412,11 +437,11 @@ void EaLogEvent(const bool isBuy, const ExecSetup &setup, const ExecEvent &ev)
       extra = StringFormat(" poi=[%.2f,%.2f] tf=M%d",
                            setup.poiLower, setup.poiUpper,
                            setup.poiSourceMinutes);
-   PrintFormat("ALPHA %s %s %s %s t=%s reason=%d%s",
+   PrintFormat("ALPHA %s %s %s %s t=%s reason=%s(%d)%s",
                InpInstanceTag, (isBuy ? "BUY" : "SELL"), EaEventName(ev.type),
                EaPhaseName(setup.phase),
                TimeToString((datetime)ev.time, TIME_DATE | TIME_MINUTES),
-               ev.reason, extra);
+               EaReasonName(ev.reason), ev.reason, extra);
   }
 
 void EaLogShadowFill(const bool isBuy, const ExecSetup &setup, const int layer)
@@ -659,14 +684,14 @@ void EaLivePlaceBasket(const bool isBuy, const ExecSetup &setup)
          request.action = TRADE_ACTION_DEAL;
          request.type = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
          request.price = isBuy ? ask : bid;
-         request.type_filling = EaMarketFilling();
+         request.type_filling = EaFillingMode();
         }
       else
         {
          request.action = TRADE_ACTION_PENDING;
          request.type = isBuy ? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
          request.price = setup.layers[i];
-         request.type_filling = ORDER_FILLING_RETURN;
+         request.type_filling = EaFillingMode();
          request.type_time = ORDER_TIME_GTC;
         }
       const bool sent = OrderSend(request, result);
@@ -784,6 +809,17 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
      {
       EaLogEvent(isBuy, setup, ev);
       EaHandleLiveEvent(isBuy, setup, ev);
+     }
+   else if(InpLogEvents && setup.phase == EXEC_TOUCHED && g_execCount > 0)
+     {
+      // Waiting for a valid IFVG/CISD confirmation after the touch: report the
+      // waiting state so a silent setup is never invisible again.
+      const long lastTime = g_execBars[g_execCount - 1].time;
+      const int barsSince = (int)((lastTime - setup.touchTime) / 60);
+      PrintFormat("ALPHA %s %s WAIT %s bars_since_touch=%d poi=[%.2f,%.2f] tf=M%d",
+                  InpInstanceTag, (isBuy ? "BUY" : "SELL"),
+                  EaPhaseName(setup.phase), barsSince, setup.poiLower,
+                  setup.poiUpper, setup.poiSourceMinutes);
      }
 
    if(ev.type == EXEC_EVENT_ARM)

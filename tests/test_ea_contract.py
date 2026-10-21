@@ -17,8 +17,38 @@ class ExpertContractTests(unittest.TestCase):
         self.assertIn("#property", self.source)
         self.assertIn("OnTick()", self.source)
 
-    def test_shadow_mode_defaults_to_true(self):
-        self.assertRegex(self.source, r"input\s+bool\s+InpShadowMode\s*=\s*true\s*;")
+    def test_live_mode_requires_an_explicit_enable(self):
+        # The owner enabled live execution, so the source default may be false.
+        # What must never change: the live gate needs BOTH the input flag and
+        # the runtime pre-flight flag, and the flag stays a plain input.
+        self.assertRegex(self.source, r"input\s+bool\s+InpShadowMode\s*=\s*(true|false)\s*;")
+        self.assertRegex(self.source, r"return\s*!InpShadowMode\s*&&\s*g_liveAllowed\s*;")
+        self.assertIn("g_liveAllowed = !InpShadowMode;", self.source)
+
+    def test_live_start_is_refused_when_state_cannot_be_recovered(self):
+        # A live start with positions of this magic is refused and downgraded
+        # to shadow, because restart recovery is not implemented.
+        self.assertRegex(
+            self.source,
+            r"g_liveAllowed\s*&&\s*EaCountOwnPositions\(\)\s*>\s*0",
+        )
+        self.assertRegex(self.source, r"g_liveAllowed\s*=\s*false;")
+
+    def test_filling_mode_follows_the_broker(self):
+        # HFM Cent only accepts FOK; a hard-coded RETURN would be rejected.
+        self.assertIn("SYMBOL_FILLING_MODE", self.source)
+        self.assertIn("EaFillingMode", self.source)
+        self.assertIn("ORDER_FILLING_FOK", self.source)
+        self.assertNotIn("request.type_filling = ORDER_FILLING_RETURN;", self.source)
+
+    def test_waiting_setup_state_is_logged(self):
+        # A setup that waits for a confirmation must never be silent.
+        self.assertIn("WAIT", self.source)
+        self.assertIn("bars_since_touch", self.source)
+
+    def test_cancel_reasons_are_logged_by_name(self):
+        self.assertIn("EaReasonName", self.source)
+        self.assertIn("EXEC_REASON_STALE", self.source)
 
     def test_kernels_are_included(self):
         self.assertIn('<Alphatom/ExecKernel.mqh>', self.source)
