@@ -6,6 +6,11 @@
 //| function is ever called: the expert only detects, simulates and   |
 //| logs. Live execution stays behind EaLiveEnabled(), which requires |
 //| InpShadowMode=false and a clean live pre-flight.                  |
+//|                                                                  |
+//| The published default is shadow mode so that installing this       |
+//| expert can never start trading money by accident. The reference   |
+//| live installation enables it through the chart profile, not       |
+//| through this default.                                            |
 //+------------------------------------------------------------------+
 #property copyright "Alphatom"
 #property version   "1.00"
@@ -15,7 +20,7 @@
 #include <Alphatom/MSNRLevels.mqh>
 
 //--- execution
-input bool            InpShadowMode        = false;   // Live execution enabled
+input bool            InpShadowMode        = true;    // Shadow mode (no orders); set false to trade
 input ENUM_TIMEFRAMES InpExecTimeframe     = PERIOD_M1; // Execution timeframe (M1/M2/M3)
 input long            InpMagic             = 20261021;
 input double          InpLotsPerLayer      = 0.15;

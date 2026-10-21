@@ -1,6 +1,7 @@
 # Alphatom EA — deployment & live-enablement runbook
 
-Account: **HFM CENT** (`XAUUSDc`, currency `USC`, hedging), login `229168581`.
+Account: **HFM CENT** (`XAUUSDc`, currency `USC`, hedging). The account login of
+the reference installation is deliberately not part of this repository.
 Terminal: portable Wine build under `/opt/mt5/work/wp64`, managed by systemd
 `mt5-terminal.service` (profile `Guarded`).
 
