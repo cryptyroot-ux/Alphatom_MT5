@@ -4,8 +4,9 @@ BUILD_DIR := build
 KERNEL_TEST := $(BUILD_DIR)/msnr_kernel_tests
 EXEC_TEST := $(BUILD_DIR)/exec_kernel_tests
 LEVEL_TEST := $(BUILD_DIR)/level_replay_tests
+LIVE_REPLAY := $(BUILD_DIR)/live_replay
 
-.PHONY: test test-kernel test-exec test-levels test-python clean
+.PHONY: test test-kernel test-exec test-levels test-python test-replay clean
 
 test: test-kernel test-exec test-levels test-python
 
@@ -29,6 +30,16 @@ $(KERNEL_TEST): tests/msnr_kernel_tests.cpp MQL5/Include/Alphatom/MSNRKernel.mqh
 $(EXEC_TEST): tests/exec_kernel_tests.cpp MQL5/Include/Alphatom/ExecKernel.mqh MQL5/Include/Alphatom/MSNRKernel.mqh
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ tests/exec_kernel_tests.cpp
+
+# Offline replay of the live expert loop on exported HFM bars. The dataset is
+# the live export of 2026-10-21 (4000 M1 bars + 1500 bars per POI timeframe);
+# re-export it with MQL5/Experts/AlphatomBarsExport.mq5.
+test-replay: $(LIVE_REPLAY)
+	./$(LIVE_REPLAY) tests/data/live_replay_m1_20261021.csv tests/data/live_replay_poi_20261021.csv
+
+$(LIVE_REPLAY): tests/live_replay.cpp MQL5/Include/Alphatom/ExecKernel.mqh MQL5/Include/Alphatom/MSNRLevels.mqh MQL5/Include/Alphatom/MSNRKernel.mqh
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ tests/live_replay.cpp
 
 test-python:
 	@if find tests -maxdepth 1 -type f -name 'test_*.py' -print -quit | grep -q .; then \

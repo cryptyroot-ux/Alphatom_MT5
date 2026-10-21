@@ -85,6 +85,7 @@ EaLink    g_sellLink;
 ExecConfig g_cfg;
 
 bool g_liveAllowed = false;
+int  g_closedBars = 0;
 
 //+------------------------------------------------------------------+
 //| Small helpers                                                    |
@@ -836,6 +837,40 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
       EaClearLink(link);
   }
 
+// Count the POI lifecycle states of one timeframe so the heartbeat can show
+// whether a fresh level (the only kind that may start a setup) exists.
+string EaPoiStateSummary(const int index)
+  {
+   int fresh = 0;
+   int unfresh = 0;
+   int broken = 0;
+   for(int i = 0; i < EaPoiCount(index); ++i)
+     {
+      MSNRLevel level;
+      if(!EaPoiLevelAt(index, i, level))
+         continue;
+      if(level.state == MSNR_STATE_FRESH || level.state == MSNR_STATE_FLIPPED_FRESH)
+         ++fresh;
+      else if(level.state == MSNR_STATE_BROKEN)
+         ++broken;
+      else
+         ++unfresh;
+     }
+   return StringFormat("%d/%d/%d", fresh, unfresh, broken);
+  }
+
+void EaLogHeartbeat()
+  {
+   if(!InpLogEvents || g_execCount <= 0)
+      return;
+   const MSNRBar last = g_execBars[g_execCount - 1];
+   PrintFormat("ALPHA %s HEARTBEAT t=%s m15=%s m30=%s h1=%s (fresh/unfresh/broken) buy=%s sell=%s",
+               InpInstanceTag,
+               TimeToString((datetime)last.time, TIME_DATE | TIME_MINUTES),
+               EaPoiStateSummary(0), EaPoiStateSummary(1), EaPoiStateSummary(2),
+               EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
+  }
+
 void EaOnClosedBar()
   {
    EaRefreshAllPoi();
@@ -843,6 +878,9 @@ void EaOnClosedBar()
       return;
    EaProcessDirection(true, g_buySetup, g_buyLink);
    EaProcessDirection(false, g_sellSetup, g_sellLink);
+   ++g_closedBars;
+   if(g_closedBars % 30 == 0)
+      EaLogHeartbeat();
   }
 
 void EaLogRuntimeProbe()
