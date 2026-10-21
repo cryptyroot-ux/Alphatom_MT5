@@ -1053,7 +1053,8 @@ void EaWriteState()
    if(sellRow != "")
       FileWriteString(handle, sellRow + "\r\n");
    FileClose(handle);
-   if(buyRow == "" && sellRow == "" && !g_stateWarned)
+   if(buyRow == "" && sellRow == "" && !g_stateWarned &&
+      (Exec_IsActive(g_buySetup) || Exec_IsActive(g_sellSetup)))
      {
       g_stateWarned = true;
       PrintFormat("ALPHA %s state: no row written although buy=%s sell=%s",

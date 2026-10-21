@@ -41,6 +41,35 @@ int OnInit()
      }
 
    FileWrite(handle, "key", "value");
+   // The open positions of the account, so a lost or foreign position can be
+   // identified by its magic number and comment.
+   for(int i = 0; i < PositionsTotal(); ++i)
+     {
+      const ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      ProbeRow(handle, StringFormat("position_%I64d_symbol", ticket),
+               PositionGetString(POSITION_SYMBOL));
+      ProbeRow(handle, StringFormat("position_%I64d_magic", ticket),
+               IntegerToString((int)PositionGetInteger(POSITION_MAGIC)));
+      ProbeRow(handle, StringFormat("position_%I64d_comment", ticket),
+               PositionGetString(POSITION_COMMENT));
+      ProbeRow(handle, StringFormat("position_%I64d_type", ticket),
+               IntegerToString((int)PositionGetInteger(POSITION_TYPE)));
+      ProbeRow(handle, StringFormat("position_%I64d_volume", ticket),
+               DoubleToString(PositionGetDouble(POSITION_VOLUME), 2));
+      ProbeRow(handle, StringFormat("position_%I64d_price", ticket),
+               DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), 2));
+      ProbeRow(handle, StringFormat("position_%I64d_sl", ticket),
+               DoubleToString(PositionGetDouble(POSITION_SL), 2));
+      ProbeRow(handle, StringFormat("position_%I64d_tp", ticket),
+               DoubleToString(PositionGetDouble(POSITION_TP), 2));
+      ProbeRow(handle, StringFormat("position_%I64d_profit", ticket),
+               DoubleToString(PositionGetDouble(POSITION_PROFIT), 2));
+      ProbeRow(handle, StringFormat("position_%I64d_time", ticket),
+               TimeToString((datetime)PositionGetInteger(POSITION_TIME),
+                            TIME_DATE | TIME_MINUTES));
+     }
    ProbeRow(handle, "time", TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
    ProbeRow(handle, "account_login",
             IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)));
