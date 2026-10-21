@@ -15,7 +15,7 @@
 #include <Alphatom/MSNRLevels.mqh>
 
 //--- execution
-input bool            InpShadowMode        = true;   // Shadow mode (no orders)
+input bool            InpShadowMode        = false;   // Live execution enabled
 input ENUM_TIMEFRAMES InpExecTimeframe     = PERIOD_M1; // Execution timeframe (M1/M2/M3)
 input long            InpMagic             = 20261021;
 input double          InpLotsPerLayer      = 0.15;
