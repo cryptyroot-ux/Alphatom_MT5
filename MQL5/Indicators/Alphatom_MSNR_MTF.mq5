@@ -34,6 +34,10 @@ int g_m15_level_count = 0;
 int g_m30_level_count = 0;
 int g_h1_level_count = 0;
 
+// Stack text labels in the top-right corner so labels from multiple
+// timeframes / levels no longer overlap at the chart's right edge.
+int g_labelStackY = 0;
+
 string TimeframeTag(const ENUM_TIMEFRAMES timeframe)
   {
    if(timeframe == PERIOD_M15)
@@ -145,7 +149,7 @@ void DrawLevel(const ENUM_TIMEFRAMES timeframe,
                                              "TXT_" + kind);
    const double labelPrice = level.isGap ? (level.lower + level.upper) * 0.5 :
                                            level.price;
-   if(ObjectCreate(0, labelName, OBJ_TEXT, 0, TimeCurrent(), labelPrice))
+   if(ObjectCreate(0, labelName, OBJ_TEXT, 0, 0, 0))
      {
       ObjectSetString(0, labelName, OBJPROP_TEXT,
                       TimeframeTag(timeframe) + " " + roleTag + " " +
@@ -154,6 +158,14 @@ void DrawLevel(const ENUM_TIMEFRAMES timeframe,
       ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
       ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
+      // Corner stacking: labels form a tidy column at top-right instead of
+      // overlapping at the right-edge price level.
+      ObjectSetInteger(0, labelName, OBJPROP_CORNER, (ENUM_BASE_CORNER)3);
+      ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 8);
+      ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, g_labelStackY * 13);
+      // Keep a harmless price anchor for object-list sorting; ignored in corner mode.
+      ObjectSetDouble(0, labelName, OBJPROP_PRICE, labelPrice);
+      ++g_labelStackY;
      }
 
    if(!level.isGap && InpShowAV)
@@ -290,6 +302,7 @@ int OnCalculate(const int rates_total,
   {
    if(rates_total <= 0)
       return 0;
+   g_labelStackY = 0;
    ProcessTimeframe(MSNR_SOURCE_PERIODS[0], g_m15_levels, g_m15_level_count);
    ProcessTimeframe(MSNR_SOURCE_PERIODS[1], g_m30_levels, g_m30_level_count);
    ProcessTimeframe(MSNR_SOURCE_PERIODS[2], g_h1_levels, g_h1_level_count);

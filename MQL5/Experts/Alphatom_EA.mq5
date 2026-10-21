@@ -404,6 +404,10 @@ void EaLogEvent(const bool isBuy, const ExecSetup &setup, const ExecEvent &ev)
                            setup.initialSL, setup.tp[0], setup.tp[1],
                            setup.tp[2], setup.basketRisk,
                            AccountInfoString(ACCOUNT_CURRENCY));
+   else if(ev.type == EXEC_EVENT_SKIP)
+      extra = StringFormat(" risk=%.2f cap=%.2f %s",
+                           setup.basketRisk, g_cfg.riskCap,
+                           AccountInfoString(ACCOUNT_CURRENCY));
    if(ev.type == EXEC_EVENT_TOUCH)
       extra = StringFormat(" poi=[%.2f,%.2f] tf=M%d",
                            setup.poiLower, setup.poiUpper,

@@ -73,6 +73,15 @@ class ExpertContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"request.action = TRADE_ACTION_DEAL;")
         self.assertRegex(self.source, r"request.action = TRADE_ACTION_PENDING;")
 
+    def test_money_cap_input_is_configurable_and_logged(self):
+        # Guide §13 leaves the money cap undefined: the EA exposes it as an
+        # input (0 = off), reads it into ExecConfig.riskCap, and logs basket
+        # risk on both ARM and SKIP events so capped setups remain visible.
+        self.assertRegex(self.source, r"input\s+double\s+InpRiskCapMoney\s*=")
+        self.assertIn("g_cfg.riskCap = InpRiskCapMoney;", self.source)
+        self.assertRegex(self.source, r"risk=%.2f")
+        self.assertIn("setup.basketRisk", self.source)
+
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 
