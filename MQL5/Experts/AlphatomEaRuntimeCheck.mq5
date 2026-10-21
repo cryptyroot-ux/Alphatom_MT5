@@ -41,6 +41,40 @@ int OnInit()
      }
 
    FileWrite(handle, "key", "value");
+   // The closed deals of the account history, so every trade can be audited.
+   if(HistorySelect(0, TimeCurrent()))
+     {
+      const int deals = HistoryDealsTotal();
+      ProbeRow(handle, "history_deals_total", IntegerToString(deals));
+      for(int i = 0; i < deals; ++i)
+        {
+         const ulong ticket = HistoryDealGetTicket(i);
+         if(ticket == 0)
+            continue;
+         const string tag = StringFormat("deal_%I64d", ticket);
+         ProbeRow(handle, tag + "_time",
+                  TimeToString((datetime)HistoryDealGetInteger(ticket, DEAL_TIME),
+                               TIME_DATE | TIME_MINUTES));
+         ProbeRow(handle, tag + "_magic",
+                  IntegerToString((int)HistoryDealGetInteger(ticket, DEAL_MAGIC)));
+         ProbeRow(handle, tag + "_entry",
+                  IntegerToString((int)HistoryDealGetInteger(ticket, DEAL_ENTRY)));
+         ProbeRow(handle, tag + "_type",
+                  IntegerToString((int)HistoryDealGetInteger(ticket, DEAL_TYPE)));
+         ProbeRow(handle, tag + "_comment",
+                  HistoryDealGetString(ticket, DEAL_COMMENT));
+         ProbeRow(handle, tag + "_volume",
+                  DoubleToString(HistoryDealGetDouble(ticket, DEAL_VOLUME), 2));
+         ProbeRow(handle, tag + "_price",
+                  DoubleToString(HistoryDealGetDouble(ticket, DEAL_PRICE), 2));
+         ProbeRow(handle, tag + "_profit",
+                  DoubleToString(HistoryDealGetDouble(ticket, DEAL_PROFIT), 2));
+         ProbeRow(handle, tag + "_commission",
+                  DoubleToString(HistoryDealGetDouble(ticket, DEAL_COMMISSION), 2));
+         ProbeRow(handle, tag + "_swap",
+                  DoubleToString(HistoryDealGetDouble(ticket, DEAL_SWAP), 2));
+        }
+     }
    // The open positions of the account, so a lost or foreign position can be
    // identified by its magic number and comment.
    for(int i = 0; i < PositionsTotal(); ++i)
