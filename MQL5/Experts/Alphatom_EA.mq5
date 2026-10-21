@@ -891,6 +891,11 @@ void EaLogRuntimeProbe()
                AccountInfoString(ACCOUNT_CURRENCY),
                AccountInfoInteger(ACCOUNT_LEVERAGE),
                EnumToString((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)));
+   PrintFormat("ALPHA %s probe trade flags: terminalAllowed=%d mqlAllowed=%d accountTradeMode=%d",
+               InpInstanceTag,
+               (int)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED),
+               (int)MQLInfoInteger(MQL_TRADE_ALLOWED),
+               (int)AccountInfoInteger(ACCOUNT_TRADE_MODE));
    PrintFormat("ALPHA %s probe symbol: %s digits=%d point=%.5f tick=%.5f tickValueLoss=%.4f tickValueProfit=%.4f contract=%.2f stopsLevel=%d freezeLevel=%d spread=%d fillingMask=%d tradeMode=%s moneyPerPipLot=%.4f",
                InpInstanceTag, _Symbol,
                (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS), _Point,
