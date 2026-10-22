@@ -236,8 +236,7 @@ static void test_entry_zone_for_cisd_uses_three_bar_band() {
                              bar(100.2, 100.5, 99.6, 100.1),
                              bar(100.1, 100.3, 99.9, 100.0)};
   MSNRZone band{};
-  CHECK(Exec_BuildCisdEntryZone(bars, static_cast<int>(bars.size()), 2, 100.0,
-                                0.20, 2.00, band));
+  CHECK(Exec_BuildCisdEntryZone(bars, static_cast<int>(bars.size()), 2, 100.0, 0.20, 2.00, 0.01, band));
   CHECK(near(band.lower, 99.5));
   CHECK(near(band.upper, 100.6));
 
@@ -245,8 +244,7 @@ static void test_entry_zone_for_cisd_uses_three_bar_band() {
   std::vector<MSNRBar> narrow{bar(100, 100.02, 99.98, 100.0),
                                bar(100, 100.03, 99.99, 100.0),
                                bar(100, 100.02, 99.98, 100.0)};
-  CHECK(Exec_BuildCisdEntryZone(narrow, static_cast<int>(narrow.size()), 1,
-                                100.0, 0.20, 2.00, band));
+  CHECK(Exec_BuildCisdEntryZone(narrow, static_cast<int>(narrow.size()), 1, 100.0, 0.20, 2.00, 0.01, band));
   CHECK(near(band.lower, 99.90));
   CHECK(near(band.upper, 100.10));
 
@@ -254,8 +252,7 @@ static void test_entry_zone_for_cisd_uses_three_bar_band() {
   std::vector<MSNRBar> wide{bar(100, 102.5, 97.5, 100.0),
                              bar(100, 102.0, 98.0, 100.0),
                              bar(100, 101.5, 98.5, 100.0)};
-  CHECK(Exec_BuildCisdEntryZone(wide, static_cast<int>(wide.size()), 1, 100.0,
-                                0.20, 2.00, band));
+  CHECK(Exec_BuildCisdEntryZone(wide, static_cast<int>(wide.size()), 1, 100.0, 0.20, 2.00, 0.01, band));
   CHECK(near(band.lower, 99.00));
   CHECK(near(band.upper, 101.00));
 }
@@ -459,7 +456,7 @@ static std::vector<MSNRBar> wideSeries() {
 static void driveBuyToConfirmed(const std::vector<MSNRBar> &bars,
                                 const ExecConfig &cfg, ExecSetup &setup,
                                 ExecEvent &ev) {
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg,
                      setup, ev));
   CHECK(ev.type == EXEC_EVENT_TOUCH);
@@ -483,8 +480,8 @@ static void test_touch_starts_setup_only_on_fresh_poi() {
   ExecSetup setup{};
   ExecEvent ev{};
 
-  CHECK(!Exec_InitSetup(setup, false, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(!Exec_InitSetup(setup, false, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(!advance(bars, 1, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg,
                       setup, ev));
   CHECK(setup.phase == EXEC_IDLE);
@@ -500,7 +497,7 @@ static void test_touch_starts_setup_only_on_fresh_poi() {
   // A flipped-fresh level may start a setup too.
   ExecSetup flipped{};
   ExecEvent flippedEvent{};
-  CHECK(Exec_InitSetup(flipped, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(flipped, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(advance(bars, 1, MSNR_STATE_FLIPPED_FRESH, MSNR_ROLE_SUPPORT, cfg,
                      flipped, flippedEvent));
   CHECK(flippedEvent.type == EXEC_EVENT_TOUCH);
@@ -518,7 +515,7 @@ static void test_confirmation_before_touch_is_ignored() {
       bar(4121.40, 4122.00, 4119.50, 4121.00)};
   ExecSetup setup{};
   ExecEvent ev{};
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(advance(bars, 6, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
                      ev));
   CHECK(ev.type == EXEC_EVENT_TOUCH);
@@ -666,7 +663,7 @@ static void test_one_active_setup_per_direction() {
   const std::vector<MSNRBar> bars = buySeries();
   ExecSetup setup{};
   ExecEvent ev{};
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(!Exec_IsActive(setup));
   CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
                      ev));
@@ -674,9 +671,9 @@ static void test_one_active_setup_per_direction() {
 
   // The predicate is the guard the expert uses per direction: a second buy is
   // refused while the first is active, a sell slot stays free.
-  CHECK(!Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(!Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   ExecSetup sell{};
-  CHECK(Exec_InitSetup(sell, false, MSNR_ROLE_RESISTANCE, 4120.0, 4121.0, 15));
+  CHECK(Exec_InitSetup(sell, false, MSNR_ROLE_RESISTANCE, 4120.0, 4121.0, 15, 1));
   CHECK(!Exec_IsActive(sell));
 }
 
@@ -687,7 +684,7 @@ static void test_arm_skips_when_stop_not_beyond_far_entry() {
   ExecSetup setup{};
   ExecEvent ev{};
 
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, wideCfg,
                      setup, ev));
   CHECK(advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, wideCfg,
@@ -709,7 +706,7 @@ static void test_arm_skips_when_basket_risk_exceeds_cap() {
   ExecSetup setup{};
   ExecEvent ev{};
 
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
                      ev));
   CHECK(advance(bars, 6, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg, setup,
@@ -766,7 +763,7 @@ static void test_sliding_window_still_finds_the_confirmation() {
   ExecEvent ev{};
 
   // Step 1: the touch bar is the newest bar of the window.
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   {
     const std::vector<MSNRBar> w = window(timed, 0, size);
     CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_FRESH,
@@ -810,7 +807,7 @@ static void test_sliding_window_drops_a_stale_setup() {
 
   ExecSetup setup{};
   ExecEvent ev{};
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   {
     const std::vector<MSNRBar> w = window(timed, 0, size);
     CHECK(Exec_Advance(w, static_cast<int>(w.size()), MSNR_STATE_FRESH,
@@ -1065,7 +1062,7 @@ static void test_a_zero_range_bar_cannot_start_a_setup() {
   const std::vector<MSNRBar> bars{bar(4119.50, 4119.50, 4119.50, 4119.50)};
   ExecSetup setup{};
   ExecEvent ev{};
-  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15, 1));
   CHECK(!advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
                      ev));
   CHECK(setup.phase == EXEC_IDLE);
@@ -1193,6 +1190,6 @@ int main() {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("50 Exec kernel test groups passed\n");
+  std::printf("51 Exec kernel test groups passed\n");
   return 0;
 }

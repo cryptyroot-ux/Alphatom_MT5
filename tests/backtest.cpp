@@ -134,6 +134,7 @@ struct Context {
   double trough = 0.0;
   double maxDrawdown = 0.0;
   int poiMinutes[3] = {15, 30, 60};
+  int execTimeframe = 1; // M1
 };
 
 std::vector<std::string> splitCsv(const std::string &line) {
@@ -525,7 +526,7 @@ int main(int argc, char **argv) {
         }
         if (bestTf < 0) continue;
         ++starts;
-        if (!Exec_InitSetup(setup, isBuy, bestRole, lower, upper, ctx.poiMinutes[bestTf])) continue;
+        if (!Exec_InitSetup(setup, isBuy, bestRole, lower, upper, ctx.poiMinutes[bestTf], ctx.execTimeframe)) continue;
         if (!Exec_Advance(window, static_cast<int>(window.size()), bestState, bestRole, cfg, setup, ev)) {
           Exec_ClearSetup(setup);
           continue;

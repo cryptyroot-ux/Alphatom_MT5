@@ -603,9 +603,9 @@ void EaLogShadowClose(const bool isBuy, const int layer, const bool isTp,
 //+------------------------------------------------------------------+
 bool EaTryStartSetup(const bool isBuy, ExecSetup &setup, EaLink &link)
   {
-   if(g_execCount <= 0)
+   if(g_execCountM1 <= 0)
       return false;
-   const MSNRBar bar = g_execBars[g_execCount - 1];
+   const MSNRBar bar = g_execBarsM1[g_execCountM1 - 1];
 
    long      bestCreated = -1;
    int       bestTf = -1;
@@ -648,7 +648,7 @@ bool EaTryStartSetup(const bool isBuy, ExecSetup &setup, EaLink &link)
       return false;
 
    ExecEvent ev;
-   if(!Exec_Advance(g_execBars, g_execCount, bestState, bestRole, g_cfg,
+   if(!Exec_Advance(g_execBarsM1, g_execCountM1, bestState, bestRole, g_cfg,
                     setup, ev))
      {
       Exec_ClearSetup(setup);
@@ -668,9 +668,9 @@ bool EaTryStartSetup(const bool isBuy, ExecSetup &setup, EaLink &link)
 //+------------------------------------------------------------------+
 void EaShadowArmFills(const bool isBuy, ExecSetup &setup)
   {
-   if(g_execCount <= 0)
+   if(g_execCountM1 <= 0)
       return;
-   const double close = g_execBars[g_execCount - 1].close;
+   const double close = g_execBarsM1[g_execCountM1 - 1].close;
    ExecEvent ev;
    for(int i = 0; i < 3; ++i)
      {
@@ -701,9 +701,9 @@ void EaSimulateBars(const bool isBuy, ExecSetup &setup)
   {
    if(setup.phase != EXEC_ARMED && setup.phase != EXEC_MANAGING)
       return;
-   if(g_execCount <= 0)
+   if(g_execCountM1 <= 0)
       return;
-   const MSNRBar bar = g_execBars[g_execCount - 1];
+   const MSNRBar bar = g_execBarsM1[g_execCountM1 - 1];
    ExecEvent ev;
 
    for(int i = 0; i < 3; ++i)
@@ -1119,19 +1119,19 @@ bool EaSideHoldsMarket(const bool isBuy)
   {
    if(isBuy)
      {
-      if(g_buySetup.phase != EXEC_ARMED && g_buySetup.phase != EXEC_MANAGING)
+      if(g_buySetupM1.phase != EXEC_ARMED && g_buySetupM1.phase != EXEC_MANAGING)
          return false;
       for(int i = 0; i < 3; ++i)
-         if(g_buySetup.layerState[i] == EXEC_LAYER_FILLED ||
-            g_buySetup.layerState[i] == EXEC_LAYER_PENDING)
+         if(g_buySetupM1.layerState[i] == EXEC_LAYER_FILLED ||
+            g_buySetupM1.layerState[i] == EXEC_LAYER_PENDING)
             return true;
       return false;
      }
-   if(g_sellSetup.phase != EXEC_ARMED && g_sellSetup.phase != EXEC_MANAGING)
+   if(g_sellSetupM1.phase != EXEC_ARMED && g_sellSetupM1.phase != EXEC_MANAGING)
       return false;
    for(int i = 0; i < 3; ++i)
-      if(g_sellSetup.layerState[i] == EXEC_LAYER_FILLED ||
-         g_sellSetup.layerState[i] == EXEC_LAYER_PENDING)
+      if(g_sellSetupM1.layerState[i] == EXEC_LAYER_FILLED ||
+         g_sellSetupM1.layerState[i] == EXEC_LAYER_PENDING)
          return true;
    return false;
   }
@@ -1189,8 +1189,7 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
      }
 
    ExecEvent ev;
-   const bool produced = Exec_Advance(g_execBars, g_execCount, state, role,
-                                      g_cfg, setup, ev);
+   const bool produced = Exec_Advance(g_execBarsM1, g_execCountM1, state, role, g_cfg, setup, ev);
    if(produced)
      {
       EaLogEvent(isBuy, setup, ev);
@@ -1198,12 +1197,12 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
          EaWriteState();          // the state must exist before the orders go out
       EaHandleLiveEvent(isBuy, setup, ev);
      }
-   else if(InpLogEvents && g_execCount > 0 &&
+   else if(InpLogEvents && g_execCountM1 > 0 &&
            (setup.phase == EXEC_TOUCHED || setup.phase == EXEC_CONFIRMED))
      {
       // A setup that waits for its confirmation or for its retest must
       // never be silent.
-      const long lastTime = g_execBars[g_execCount - 1].time;
+      const long lastTime = g_execBarsM1[g_execCountM1 - 1].time;
       if(setup.phase == EXEC_TOUCHED)
         {
          const int barsSince = (int)((lastTime - setup.touchTime) / 60);
@@ -1264,14 +1263,14 @@ string EaPoiStateSummary(const int index)
 
 void EaLogHeartbeat()
   {
-   if(!InpLogEvents || g_execCount <= 0)
+   if(!InpLogEvents || g_execCountM1 <= 0)
       return;
-   const MSNRBar last = g_execBars[g_execCount - 1];
+   const MSNRBar last = g_execBarsM1[g_execCountM1 - 1];
    PrintFormat("ALPHA %s HEARTBEAT t=%s m15=%s m30=%s h1=%s (fresh/unfresh/broken) buy=%s sell=%s",
                InpInstanceTag,
                TimeToString((datetime)last.time, TIME_DATE | TIME_MINUTES),
                EaPoiStateSummary(0), EaPoiStateSummary(1), EaPoiStateSummary(2),
-               EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
+               EaPhaseName(g_buySetupM1.phase), EaPhaseName(g_sellSetupM1.phase));
   }
 
 //+------------------------------------------------------------------+
@@ -1391,20 +1390,20 @@ void EaWriteState()
       return;
      }
    FileWriteString(handle, "# alphatom state v1\r\n");
-   const string buyRow = EaStateRow(true, g_buySetup, g_buyLink);
+   const string buyRow = EaStateRow(true, g_buySetupM1, g_buyLinkM1);
    if(buyRow != "")
       FileWriteString(handle, buyRow + "\r\n");
-   const string sellRow = EaStateRow(false, g_sellSetup, g_sellLink);
+   const string sellRow = EaStateRow(false, g_sellSetupM1, g_sellLinkM1);
    if(sellRow != "")
       FileWriteString(handle, sellRow + "\r\n");
    FileClose(handle);
    if(buyRow == "" && sellRow == "" && !g_stateWarned &&
-      (Exec_IsActive(g_buySetup) || Exec_IsActive(g_sellSetup)))
+      (Exec_IsActive(g_buySetupM1) || Exec_IsActive(g_buySetupM2) || Exec_IsActive(g_buySetupM3) || Exec_IsActive(g_sellSetupM1) || Exec_IsActive(g_sellSetupM2) || Exec_IsActive(g_sellSetupM3)))
      {
       g_stateWarned = true;
       PrintFormat("ALPHA %s state: no row written although buy=%s sell=%s",
-                  InpInstanceTag, EaPhaseName(g_buySetup.phase),
-                  EaPhaseName(g_sellSetup.phase));
+                  InpInstanceTag, EaPhaseName(g_buySetupM1.phase),
+                  EaPhaseName(g_sellSetupM1.phase));
      }
   }
 
@@ -1495,14 +1494,14 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
         }
       if(isBuy)
         {
-         g_buySetup = setup;
-         g_buyLink = link;
+         g_buySetupM1 = setup;
+         g_buyLinkM1 = link;
          outBuyRestored = true;
         }
       else
         {
-         g_sellSetup = setup;
-         g_sellLink = link;
+         g_sellSetupM1 = setup;
+         g_sellLinkM1 = link;
          outSellRestored = true;
         }
       ++restored;
@@ -1653,23 +1652,23 @@ string EaValidateSide(const bool isBuy, ExecSetup &setup,
 
 string EaValidateRecovery(const bool buyRestored, const bool sellRestored)
   {
-   const string buyReason = EaValidateSide(true, g_buySetup, buyRestored);
+   const string buyReason = EaValidateSide(true, g_buySetupM1, buyRestored);
    if(buyReason != "")
       return buyReason;
-   return EaValidateSide(false, g_sellSetup, sellRestored);
+   return EaValidateSide(false, g_sellSetupM1, sellRestored);
   }
 
 bool EaOnClosedBar()
   {
    EaRetryDeletes();
    EaRefreshAllPoi();
-   if(!EaCopyExecBars())
+   if(!EaCopyExecBarsTf(1))
       return false;
    // The contract specification can change during the session, so the
    // config is rebuilt from the live symbol on every bar.
    EaBuildConfig();
-   EaProcessDirection(true, g_buySetup, g_buyLink);
-   EaProcessDirection(false, g_sellSetup, g_sellLink);
+   EaProcessDirectionTf(true, 1, g_buySetupM1, g_buyLinkM1);
+   EaProcessDirectionTf(false, 1, g_sellSetupM1, g_sellLinkM1);
    EaWriteState();
    ++g_closedBars;
    if(g_closedBars % 30 == 0)
@@ -1687,44 +1686,133 @@ void EaResolveConfirmationConflicts()
    for(int dir = 0; dir < 2; ++dir)
    {
       bool isBuy = (dir == 0);
-      ExecSetup *setups[3];
-      EaLink *links[3];
-      if(isBuy)
-      {
-         setups[0] = &g_buySetupM1; setups[1] = &g_buySetupM2; setups[2] = &g_buySetupM3;
-         links[0] = &g_buyLinkM1; links[1] = &g_buyLinkM2; links[2] = &g_buyLinkM3;
-      }
-      else
-      {
-         setups[0] = &g_sellSetupM1; setups[1] = &g_sellSetupM2; setups[2] = &g_sellSetupM3;
-         links[0] = &g_sellLinkM1; links[1] = &g_sellLinkM2; links[2] = &g_sellLinkM3;
-      }
       
       long earliestTime = 0;
       int earliestIdx = -1;
-      for(int i = 0; i < 3; ++i)
+      
+      // First pass: find earliest confirmation - check each setup directly
+      if(isBuy)
       {
-         if(setups[i]->phase >= EXEC_CONFIRMED && setups[i]->confirmTime > 0)
+         if(g_buySetupM1.phase >= EXEC_CONFIRMED && g_buySetupM1.confirmTime > 0)
          {
-            if(earliestTime == 0 || setups[i]->confirmTime < earliestTime)
+            earliestTime = g_buySetupM1.confirmTime;
+            earliestIdx = 0;
+         }
+         if(g_buySetupM2.phase >= EXEC_CONFIRMED && g_buySetupM2.confirmTime > 0)
+         {
+            if(earliestTime == 0 || g_buySetupM2.confirmTime < earliestTime)
             {
-               earliestTime = setups[i]->confirmTime;
-               earliestIdx = i;
+               earliestTime = g_buySetupM2.confirmTime;
+               earliestIdx = 1;
+            }
+         }
+         if(g_buySetupM3.phase >= EXEC_CONFIRMED && g_buySetupM3.confirmTime > 0)
+         {
+            if(earliestTime == 0 || g_buySetupM3.confirmTime < earliestTime)
+            {
+               earliestTime = g_buySetupM3.confirmTime;
+               earliestIdx = 2;
+            }
+         }
+      }
+      else
+      {
+         if(g_sellSetupM1.phase >= EXEC_CONFIRMED && g_sellSetupM1.confirmTime > 0)
+         {
+            earliestTime = g_sellSetupM1.confirmTime;
+            earliestIdx = 0;
+         }
+         if(g_sellSetupM2.phase >= EXEC_CONFIRMED && g_sellSetupM2.confirmTime > 0)
+         {
+            if(earliestTime == 0 || g_sellSetupM2.confirmTime < earliestTime)
+            {
+               earliestTime = g_sellSetupM2.confirmTime;
+               earliestIdx = 1;
+            }
+         }
+         if(g_sellSetupM3.phase >= EXEC_CONFIRMED && g_sellSetupM3.confirmTime > 0)
+         {
+            if(earliestTime == 0 || g_sellSetupM3.confirmTime < earliestTime)
+            {
+               earliestTime = g_sellSetupM3.confirmTime;
+               earliestIdx = 2;
             }
          }
       }
       
-      for(int i = 0; i < 3; ++i)
+      // Second pass: cancel later confirmations
+      if(earliestIdx >= 0)
       {
-         if(i != earliestIdx && setups[i]->phase >= EXEC_CONFIRMED)
+         if(isBuy)
          {
-            ExecEvent cancelEvent;
-            if(Exec_CancelForOpposite(*setups[i], cancelEvent))
+            if(earliestIdx != 0 && g_buySetupM1.phase >= EXEC_CONFIRMED)
             {
-               EaLogEvent(dir == 0, *setups[i], cancelEvent);
-               EaHandleLiveEvent(dir == 0, *setups[i], cancelEvent);
-               EaClearLink(*links[i]);
-               EaWriteState();
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_buySetupM1, cancelEvent))
+               {
+                  EaLogEvent(true, g_buySetupM1, cancelEvent);
+                  EaHandleLiveEvent(true, g_buySetupM1, cancelEvent);
+                  EaClearLink(g_buyLinkM1);
+                  EaWriteState();
+               }
+            }
+            if(earliestIdx != 1 && g_buySetupM2.phase >= EXEC_CONFIRMED)
+            {
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_buySetupM2, cancelEvent))
+               {
+                  EaLogEvent(true, g_buySetupM2, cancelEvent);
+                  EaHandleLiveEvent(true, g_buySetupM2, cancelEvent);
+                  EaClearLink(g_buyLinkM2);
+                  EaWriteState();
+               }
+            }
+            if(earliestIdx != 2 && g_buySetupM3.phase >= EXEC_CONFIRMED)
+            {
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_buySetupM3, cancelEvent))
+               {
+                  EaLogEvent(true, g_buySetupM3, cancelEvent);
+                  EaHandleLiveEvent(true, g_buySetupM3, cancelEvent);
+                  EaClearLink(g_buyLinkM3);
+                  EaWriteState();
+               }
+            }
+         }
+         else
+         {
+            if(earliestIdx != 0 && g_sellSetupM1.phase >= EXEC_CONFIRMED)
+            {
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_sellSetupM1, cancelEvent))
+               {
+                  EaLogEvent(false, g_sellSetupM1, cancelEvent);
+                  EaHandleLiveEvent(false, g_sellSetupM1, cancelEvent);
+                  EaClearLink(g_sellLinkM1);
+                  EaWriteState();
+               }
+            }
+            if(earliestIdx != 1 && g_sellSetupM2.phase >= EXEC_CONFIRMED)
+            {
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_sellSetupM2, cancelEvent))
+               {
+                  EaLogEvent(false, g_sellSetupM2, cancelEvent);
+                  EaHandleLiveEvent(false, g_sellSetupM2, cancelEvent);
+                  EaClearLink(g_sellLinkM2);
+                  EaWriteState();
+               }
+            }
+            if(earliestIdx != 2 && g_sellSetupM3.phase >= EXEC_CONFIRMED)
+            {
+               ExecEvent cancelEvent;
+               if(Exec_CancelForOpposite(g_sellSetupM3, cancelEvent))
+               {
+                  EaLogEvent(false, g_sellSetupM3, cancelEvent);
+                  EaHandleLiveEvent(false, g_sellSetupM3, cancelEvent);
+                  EaClearLink(g_sellLinkM3);
+                  EaWriteState();
+               }
             }
          }
       }
@@ -2020,7 +2108,7 @@ void EaInitLive()
    if(restored > 0)
       PrintFormat("ALPHA %s recovery: %d setup(s) restored from %s (buy=%s sell=%s)",
                   InpInstanceTag, restored, EaStateFileName(),
-                  EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
+                  EaPhaseName(g_buySetupM1.phase), EaPhaseName(g_sellSetupM1.phase));
 
    g_liveAllowed = !InpShadowMode;
    if(g_liveAllowed)
@@ -2042,13 +2130,13 @@ void EaInitLive()
    if(g_adoptedSide >= 0 && EaLiveEnabled())
      {
       if(g_adoptedSide == 0)
-         EaLiveModifyStops(true, g_buySetup);
+         EaLiveModifyStops(true, g_buySetupM1);
       else
-         EaLiveModifyStops(false, g_sellSetup);
+         EaLiveModifyStops(false, g_sellSetupM1);
      }
    g_adoptedSide = -1;
 
-   g_lastExecOpen = iTime(_Symbol, InpExecTimeframe, 0);
+   g_lastExecOpenM1 = iTime(_Symbol, PERIOD_M1, 0);
 
    EaLogRuntimeProbe();
 
@@ -2104,10 +2192,10 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
      }
 
-   Exec_ClearSetup(g_buySetup);
-   Exec_ClearSetup(g_sellSetup);
-   EaClearLink(g_buyLink);
-   EaClearLink(g_sellLink);
+   Exec_ClearSetup(g_buySetupM1);
+   Exec_ClearSetup(g_sellSetupM1);
+   EaClearLink(g_buyLinkM1);
+   EaClearLink(g_sellLinkM1);
    g_symbolReady = false;
    g_liveInitDone = false;
    g_liveAllowed = false;
@@ -2141,8 +2229,8 @@ void OnDeinit(const int reason)
   {
    EventKillTimer();
    PrintFormat("ALPHA %s stop: reason=%d buy=%s sell=%s",
-               InpInstanceTag, reason, EaPhaseName(g_buySetup.phase),
-               EaPhaseName(g_sellSetup.phase));
+               InpInstanceTag, reason, EaPhaseName(g_buySetupM1.phase),
+               EaPhaseName(g_sellSetupM1.phase));
   }
 
 //+------------------------------------------------------------------+
@@ -2165,18 +2253,18 @@ void OnTick()
    const datetime open = iTime(_Symbol, InpExecTimeframe, 0);
    if(open == 0)
       return;
-   if(g_lastExecOpen == 0)
+   if(g_lastExecOpenM1 == 0)
      {
-      g_lastExecOpen = open;
+      g_lastExecOpenM1 = open;
       return;
      }
-   if(open == g_lastExecOpen)
+   if(open == g_lastExecOpenM1)
       return;
    // The bar is only consumed when it could really be processed: a failed
    // copy must not drop the bar for ever.
    if(!EaOnClosedBar())
       return;
-   g_lastExecOpen = open;
+   g_lastExecOpenM1 = open;
   }
 
 //+------------------------------------------------------------------+
@@ -2187,19 +2275,19 @@ void EaHandleDealFill(const bool isBuy, const int layer, const double price)
    ExecEvent ev;
    if(isBuy)
      {
-      if(Exec_RecordFill(g_buySetup, layer, price, g_cfg, ev))
+      if(Exec_RecordFill(g_buySetupM1, layer, price, g_cfg, ev))
         {
-         EaLogEvent(true, g_buySetup, ev);
-         EaLiveModifyStops(true, g_buySetup);
+         EaLogEvent(true, g_buySetupM1, ev);
+         EaLiveModifyStops(true, g_buySetupM1);
          EaWriteState();
         }
      }
    else
      {
-      if(Exec_RecordFill(g_sellSetup, layer, price, g_cfg, ev))
+      if(Exec_RecordFill(g_sellSetupM1, layer, price, g_cfg, ev))
         {
-         EaLogEvent(false, g_sellSetup, ev);
-         EaLiveModifyStops(false, g_sellSetup);
+         EaLogEvent(false, g_sellSetupM1, ev);
+         EaLiveModifyStops(false, g_sellSetupM1);
          EaWriteState();
         }
      }
@@ -2210,9 +2298,9 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
    ExecEvent ev;
    if(isBuy)
      {
-      if(Exec_RecordClose(g_buySetup, layer, isTp, ev))
+      if(Exec_RecordClose(g_buySetupM1, layer, isTp, ev))
         {
-         EaLogEvent(true, g_buySetup, ev);
+         EaLogEvent(true, g_buySetupM1, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
            {
             // The kernel cancelled the pending layers, so their resting GTC
@@ -2220,21 +2308,21 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
             // keep resting, could fill later and open a position the expert
             // does not expect (the layer is cancelled, so the fill is
             // refused and the position would stay unmanaged).
-            EaLiveCancelPendings(true, g_buySetup);
-            EaLiveModifyStops(true, g_buySetup);
+            EaLiveCancelPendings(true, g_buySetupM1);
+            EaLiveModifyStops(true, g_buySetupM1);
            }
          EaWriteState();
         }
      }
    else
      {
-      if(Exec_RecordClose(g_sellSetup, layer, isTp, ev))
+      if(Exec_RecordClose(g_sellSetupM1, layer, isTp, ev))
         {
-         EaLogEvent(false, g_sellSetup, ev);
+         EaLogEvent(false, g_sellSetupM1, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
            {
-            EaLiveCancelPendings(false, g_sellSetup);
-            EaLiveModifyStops(false, g_sellSetup);
+            EaLiveCancelPendings(false, g_sellSetupM1);
+            EaLiveModifyStops(false, g_sellSetupM1);
            }
          EaWriteState();
         }

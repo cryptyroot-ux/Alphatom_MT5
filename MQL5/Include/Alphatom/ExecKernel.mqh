@@ -551,6 +551,7 @@ struct ExecSetup
    double    poiLower;
    double    poiUpper;
    int       poiSourceMinutes;
+   int       execTimeframe;        // execution timeframe in minutes (1, 2, or 3)
    int       touchIndex;
    long      touchTime;
    int       confirmIndex;
@@ -1055,7 +1056,7 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
          confirmTime = cisdTime;
          built = Exec_BuildCisdEntryZone(execBars, execCount, anchorIndex,
                                          anchor, config.cisdMinWidth,
-                                         config.cisdMaxWidth, zone);
+                                         config.cisdMaxWidth, config.tickSize, zone);
         }
 
       if(!built)
