@@ -102,6 +102,18 @@ bool g_symbolReady = false;
 bool g_liveInitDone = false;
 bool g_hedgeRefused = false;
 
+// Tickets whose deletion the broker refused. OrderSend returns true for most
+// server rejections, so a refused delete is easy to miss - and a resting
+// order the expert believes it deleted can still fill and open a position
+// nobody manages. The tickets are retried on every closed bar.
+ulong g_deleteRetry[16];
+int    g_deleteRetryCount = 0;
+
+// The side whose position was adopted from the broker during the recovery
+// (0 = buy, 1 = sell, -1 = none). Its stop and target have to be pushed to
+// the broker once the validation is done.
+int    g_adoptedSide = -1;
+
 //+------------------------------------------------------------------+
 //| Small helpers                                                    |
 //+------------------------------------------------------------------+
@@ -650,6 +662,71 @@ int EaLayerFromComment(const string comment)
    return (int)layer;
   }
 
+// A closing deal does not carry the order comment: the broker writes its
+// own ("[sl 4112.11]", "[tp 4115.23]"). The layer is then recovered from the
+// deal that OPENED the position, which keeps the order comment. Without
+// this the close is dropped, the basket never finishes in the expert's
+// view, the state file goes stale and the next restart refuses the live
+// start. Observed live on 2026-10-22.
+int EaLayerFromPositionId(const long positionId)
+  {
+   if(positionId <= 0)
+      return -1;
+   const int total = HistoryDealsTotal();
+   for(int i = 0; i < total; ++i)
+     {
+      const ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(HistoryDealGetInteger(ticket, DEAL_POSITION_ID) != positionId)
+         continue;
+      if(HistoryDealGetInteger(ticket, DEAL_ENTRY) != DEAL_ENTRY_IN)
+         continue;
+      const int layer =
+         EaLayerFromComment(HistoryDealGetString(ticket, DEAL_COMMENT));
+      if(layer >= 0)
+         return layer;
+     }
+   return -1;
+  }
+
+// Does the broker hold a position or a resting order of this magic for
+// that side? A refused live start means the state file and the broker
+// disagree, and the account may still hold real money. Simulating fills on
+// that setup would overwrite the live state with a simulation.
+bool EaBrokerHoldsObjects(const bool isBuy)
+  {
+   for(int i = 0; i < PositionsTotal(); ++i)
+     {
+      const ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      const bool posIsBuy =
+         StringFind(PositionGetString(POSITION_COMMENT), "ALPHA B L") == 0;
+      if(posIsBuy == isBuy)
+         return true;
+     }
+   for(int i = 0; i < OrdersTotal(); ++i)
+     {
+      const ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)
+         continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic)
+         continue;
+      const bool orderIsBuy =
+         StringFind(OrderGetString(ORDER_COMMENT), "ALPHA B L") == 0;
+      if(orderIsBuy == isBuy)
+         return true;
+     }
+   return false;
+  }
+
 bool EaLiveStopsDistanceOk(const ExecSetup &setup)
   {
    const double point = (double)SymbolInfoInteger(_Symbol,
@@ -665,7 +742,7 @@ bool EaLiveStopsDistanceOk(const ExecSetup &setup)
    return true;
   }
 
-void EaLivePlaceBasket(const bool isBuy, const ExecSetup &setup)
+void EaLivePlaceBasket(const bool isBuy, ExecSetup &setup)
   {
    if(!EaLiveEnabled())
       return;
@@ -675,12 +752,14 @@ void EaLivePlaceBasket(const bool isBuy, const ExecSetup &setup)
      {
       PrintFormat("ALPHA %s %s ARM rejected: no market price",
                   InpInstanceTag, (isBuy ? "BUY" : "SELL"));
+      EaAbandonBasket(isBuy, setup);
       return;
      }
    if(!EaLiveStopsDistanceOk(setup))
      {
       PrintFormat("ALPHA %s %s ARM rejected: broker stop level too wide",
                   InpInstanceTag, (isBuy ? "BUY" : "SELL"));
+      EaAbandonBasket(isBuy, setup);
       return;
      }
 
@@ -718,17 +797,77 @@ void EaLivePlaceBasket(const bool isBuy, const ExecSetup &setup)
          request.type_time = ORDER_TIME_GTC;
         }
       const bool sent = OrderSend(request, result);
-      if(!sent || (result.retcode != TRADE_RETCODE_DONE &&
-                   result.retcode != TRADE_RETCODE_PLACED))
+      if(sent && result.retcode == TRADE_RETCODE_DONE_PARTIAL)
+        {
+         // A partial fill is still a position at the broker: the layer stays
+         // pending and the fill is recorded when the deal arrives.
+         PrintFormat("ALPHA %s %s ORDER_PARTIAL L%d vol=%s price=%.2f",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"), i + 1,
+                     DoubleToString(result.volume, 2), request.price);
+        }
+      else if(!sent || (result.retcode != TRADE_RETCODE_DONE &&
+                        result.retcode != TRADE_RETCODE_PLACED))
+        {
          PrintFormat("ALPHA %s %s ORDER_FAIL L%d ret=%d comment=%s",
                      InpInstanceTag, (isBuy ? "BUY" : "SELL"), i + 1,
                      (int)result.retcode, result.comment);
+         // The order does not exist at the broker, so the layer must not
+         // stay PENDING: a PENDING layer counts as "holding the market" in
+         // the one-side gate and would block this direction until the POI
+         // level ages out of the map, and the state file would claim an
+         // order that is not there.
+         if(Exec_CancelLayer(setup, i))
+            EaWriteState();
+        }
       else
          PrintFormat("ALPHA %s %s ORDER_%s L%d ticket=%I64u price=%.2f",
                      InpInstanceTag, (isBuy ? "BUY" : "SELL"),
                      (marketable ? "MARKET" : "PLACED"), i + 1,
                      result.order, request.price);
      }
+  }
+
+void EaRememberDeleteRetry(const ulong ticket)
+  {
+   for(int i = 0; i < g_deleteRetryCount; ++i)
+      if(g_deleteRetry[i] == ticket)
+         return;
+   if(g_deleteRetryCount >= (int)(sizeof(g_deleteRetry) / sizeof(g_deleteRetry[0])))
+      return;
+   g_deleteRetry[g_deleteRetryCount++] = ticket;
+  }
+
+// Retry the deletions the broker refused. A resting order the expert
+// believes it deleted can still fill and open a position that nobody
+// manages.
+void EaRetryDeletes()
+  {
+   if(!EaLiveEnabled())
+      return;
+   int kept = 0;
+   for(int i = 0; i < g_deleteRetryCount; ++i)
+     {
+      const ulong ticket = g_deleteRetry[i];
+      if(!OrderSelect(ticket))
+         continue;                       // the order is gone
+      if(PositionSelectByTicket(ticket))
+        {
+         // The order became a position: it cannot be deleted any more.
+         PrintFormat("ALPHA %s ORDER_DELETE_ABANDONED ticket=%I64u (it is a position now)",
+                     InpInstanceTag, ticket);
+         continue;
+        }
+      MqlTradeRequest request;
+      MqlTradeResult result;
+      ZeroMemory(request);
+      ZeroMemory(result);
+      request.action = TRADE_ACTION_REMOVE;
+      request.order = ticket;
+      if(OrderSend(request, result) && result.retcode == TRADE_RETCODE_DONE)
+         continue;
+      g_deleteRetry[kept++] = ticket;
+     }
+   g_deleteRetryCount = kept;
   }
 
 void EaLiveCancelPendings(const bool isBuy, const ExecSetup &setup)
@@ -753,11 +892,30 @@ void EaLiveCancelPendings(const bool isBuy, const ExecSetup &setup)
       ZeroMemory(result);
       request.action = TRADE_ACTION_REMOVE;
       request.order = ticket;
-      if(!OrderSend(request, result))
-         PrintFormat("ALPHA %s %s ORDER_DELETE_FAIL ticket=%I64u ret=%d",
-                     InpInstanceTag, (isBuy ? "BUY" : "SELL"), ticket,
-                     (int)result.retcode);
+      // OrderSend returns true for most server rejections: the failure is
+      // in the retcode, and a refused delete has to be reported and retried.
+      const bool sent = OrderSend(request, result);
+      if(sent && (result.retcode == TRADE_RETCODE_DONE ||
+                  result.retcode == TRADE_RETCODE_INVALID_ORDER ||
+                  result.retcode == TRADE_RETCODE_NO_CHANGES))
+         continue;                       // the order is gone
+      PrintFormat("ALPHA %s %s ORDER_DELETE_FAIL ticket=%I64u ret=%d",
+                  InpInstanceTag, (isBuy ? "BUY" : "SELL"), ticket,
+                  (int)result.retcode);
+      EaRememberDeleteRetry(ticket);
      }
+  }
+
+// The basket was not placed: no order went out. The layers must not stay
+// PENDING, or the state file would claim orders that do not exist at the
+// broker and the one-side gate would keep the direction blocked.
+void EaAbandonBasket(const bool isBuy, ExecSetup &setup)
+  {
+   for(int i = 0; i < 3; ++i)
+      Exec_CancelLayer(setup, i);
+   PrintFormat("ALPHA %s %s basket abandoned: no order was placed",
+               InpInstanceTag, (isBuy ? "BUY" : "SELL"));
+   EaWriteState();
   }
 
 void EaLiveModifyStops(const bool isBuy, const ExecSetup &setup)
@@ -779,15 +937,46 @@ void EaLiveModifyStops(const bool isBuy, const ExecSetup &setup)
       const int layer = EaLayerFromComment(PositionGetString(POSITION_COMMENT));
       if(layer < 0 || setup.layerState[layer] != EXEC_LAYER_FILLED)
          continue;
+
+      // A layer that fills exactly at its limit price already carries the
+      // stop and the target of the order it was placed with. Sending the
+      // same values again is a no-op that the broker answers with 10025
+      // ("no changes"), which would be logged as a failure on a completely
+      // normal event. The request is therefore only sent when a value really
+      // differs. A position without a stop or without a target always
+      // differs, so it is never left unprotected.
+      const double currentSl = PositionGetDouble(POSITION_SL);
+      const double currentTp = PositionGetDouble(POSITION_TP);
+      const double wantedSl = setup.stops[layer];
+      const double wantedTp = setup.tp[layer];
+      double step = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(step <= 0.0)
+         step = _Point;
+      const bool slMissing = (currentSl <= 0.0);
+      const bool tpMissing = (currentTp <= 0.0);
+      const bool changed =
+         slMissing || tpMissing ||
+         (MathRound(currentSl / step) != MathRound(wantedSl / step)) ||
+         (MathRound(currentTp / step) != MathRound(wantedTp / step));
+      if(!changed)
+         continue;
+
       MqlTradeRequest request;
       MqlTradeResult result;
       ZeroMemory(request);
       ZeroMemory(result);
       request.action = TRADE_ACTION_SLTP;
       request.position = ticket;
-      request.sl = setup.stops[layer];
-      request.tp = setup.tp[layer];
-      if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+      request.sl = wantedSl;
+      request.tp = wantedTp;
+      if(!OrderSend(request, result))
+         PrintFormat("ALPHA %s %s SLTP_FAIL ticket=%I64u ret=%d",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"), ticket,
+                     (int)result.retcode);
+      else if(result.retcode == TRADE_RETCODE_NO_CHANGES)
+         PrintFormat("ALPHA %s %s SLTP_NOOP ticket=%I64u (stop and target unchanged)",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"), ticket);
+      else if(result.retcode != TRADE_RETCODE_DONE)
          PrintFormat("ALPHA %s %s SLTP_FAIL ticket=%I64u ret=%d",
                      InpInstanceTag, (isBuy ? "BUY" : "SELL"), ticket,
                      (int)result.retcode);
@@ -915,26 +1104,42 @@ void EaProcessDirection(const bool isBuy, ExecSetup &setup, EaLink &link)
          EaWriteState();          // the state must exist before the orders go out
       EaHandleLiveEvent(isBuy, setup, ev);
      }
-   else if(InpLogEvents && setup.phase == EXEC_TOUCHED && g_execCount > 0)
+   else if(InpLogEvents && g_execCount > 0 &&
+           (setup.phase == EXEC_TOUCHED || setup.phase == EXEC_CONFIRMED))
      {
-      // Waiting for a valid IFVG/CISD confirmation after the touch: report the
-      // waiting state so a silent setup is never invisible again.
+      // A setup that waits for its confirmation or for its retest must
+      // never be silent.
       const long lastTime = g_execBars[g_execCount - 1].time;
-      const int barsSince = (int)((lastTime - setup.touchTime) / 60);
-      PrintFormat("ALPHA %s %s WAIT %s bars_since_touch=%d poi=[%.2f,%.2f] tf=M%d",
-                  InpInstanceTag, (isBuy ? "BUY" : "SELL"),
-                  EaPhaseName(setup.phase), barsSince, setup.poiLower,
-                  setup.poiUpper, setup.poiSourceMinutes);
+      if(setup.phase == EXEC_TOUCHED)
+        {
+         const int barsSince = (int)((lastTime - setup.touchTime) / 60);
+         PrintFormat("ALPHA %s %s WAIT %s bars_since_touch=%d poi=[%.2f,%.2f] tf=M%d",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"),
+                     EaPhaseName(setup.phase), barsSince, setup.poiLower,
+                     setup.poiUpper, setup.poiSourceMinutes);
+        }
+      else
+        {
+         const int barsSince = (int)((lastTime - setup.confirmTime) / 60);
+         PrintFormat("ALPHA %s %s WAIT %s bars_since_confirm=%d zone=[%.2f,%.2f] E1=%.2f",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"),
+                     EaPhaseName(setup.phase), barsSince,
+                     setup.entryZone.lower, setup.entryZone.upper,
+                     setup.layers[0]);
+        }
      }
 
    if(ev.type == EXEC_EVENT_ARM)
      {
-      if(InpShadowMode || !g_liveAllowed)
+      if((InpShadowMode || !g_liveAllowed) && !EaBrokerHoldsObjects(isBuy))
          EaShadowArmFills(isBuy, setup);
       return;
      }
 
-   if(InpShadowMode || !g_liveAllowed)
+   // The simulation may never touch a setup the broker still holds money
+   // in: a refused live start means the state file and the broker disagree,
+   // and simulating fills on it would overwrite the live state.
+   if((InpShadowMode || !g_liveAllowed) && !EaBrokerHoldsObjects(isBuy))
       EaSimulateBars(isBuy, setup);
 
    if(!Exec_IsActive(setup))
@@ -1275,9 +1480,37 @@ string EaValidateSide(const bool isBuy, ExecSetup &setup,
          return "an open position carries no layer comment";
       if(!restored)
          return "open positions exist without a matching state file";
+      // The state is written BEFORE the order goes out, so a terminal that
+      // died between the fill and the next state write leaves a PENDING
+      // layer while the broker already holds the position. That position is
+      // adopted from the broker instead of refusing the live start, so it
+      // keeps being managed. The stop and the target are taken from the
+      // position itself, so the state stays in sync with the broker.
       if(setup.layerState[layer] != EXEC_LAYER_FILLED)
-         return StringFormat("layer %d is open but the state file does not mark it filled",
-                             layer + 1);
+        {
+         const double open = PositionGetDouble(POSITION_PRICE_OPEN);
+         const double brokerSl = PositionGetDouble(POSITION_SL);
+         const double brokerTp = PositionGetDouble(POSITION_TP);
+         setup.layerState[layer] = EXEC_LAYER_FILLED;
+         setup.fillPrice[layer] = open;
+         if(brokerSl > 0.0)
+            setup.stops[layer] = brokerSl;
+         else if(setup.initialSL > 0.0)
+            setup.stops[layer] = setup.initialSL;
+         // The target and the SL+ are measured from the layer's own fill,
+         // so they are recomputed from the real fill price. The stop and the
+         // target are pushed to the broker once the validation is done.
+         setup.tp[layer] = Exec_ComputeTP(setup.isBuy, open,
+                                          g_cfg.tpPips[layer]);
+         setup.slPlus[layer] = Exec_ComputeSLPlus(setup.isBuy, open,
+                                                   g_cfg.slPlusPips);
+         setup.phase = EXEC_MANAGING;
+         g_adoptedSide = isBuy ? 0 : 1;
+         PrintFormat("ALPHA %s %s recovery: adopted layer %d from the broker "
+                     "(fill=%.2f sl=%.2f tp=%.2f)",
+                     InpInstanceTag, (isBuy ? "BUY" : "SELL"), layer + 1,
+                     open, setup.stops[layer], setup.tp[layer]);
+        }
      }
    for(int i = 0; i < OrdersTotal(); ++i)
      {
@@ -1324,17 +1557,19 @@ string EaValidateRecovery(const bool buyRestored, const bool sellRestored)
    return EaValidateSide(false, g_sellSetup, sellRestored);
   }
 
-void EaOnClosedBar()
+bool EaOnClosedBar()
   {
+   EaRetryDeletes();
    EaRefreshAllPoi();
    if(!EaCopyExecBars())
-      return;
+      return false;
    EaProcessDirection(true, g_buySetup, g_buyLink);
    EaProcessDirection(false, g_sellSetup, g_sellLink);
    EaWriteState();
    ++g_closedBars;
    if(g_closedBars % 30 == 0)
       EaLogHeartbeat();
+   return true;
   }
 
 void EaLogRuntimeProbe()
@@ -1482,6 +1717,18 @@ void EaInitLive()
                      InpInstanceTag, EaCountOwnPositions());
      }
 
+   // A position that was adopted from the broker gets its stop and its
+   // target recomputed from the real fill; they are pushed to the broker
+   // now, so an adopted position is never left without a stop.
+   if(g_adoptedSide >= 0 && EaLiveEnabled())
+     {
+      if(g_adoptedSide == 0)
+         EaLiveModifyStops(true, g_buySetup);
+      else
+         EaLiveModifyStops(false, g_sellSetup);
+     }
+   g_adoptedSide = -1;
+
    g_lastExecOpen = iTime(_Symbol, InpExecTimeframe, 0);
 
    EaLogRuntimeProbe();
@@ -1606,8 +1853,11 @@ void OnTick()
      }
    if(open == g_lastExecOpen)
       return;
+   // The bar is only consumed when it could really be processed: a failed
+   // copy must not drop the bar for ever.
+   if(!EaOnClosedBar())
+      return;
    g_lastExecOpen = open;
-   EaOnClosedBar();
   }
 
 //+------------------------------------------------------------------+
@@ -1645,7 +1895,15 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
         {
          EaLogEvent(true, g_buySetup, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
+           {
+            // The kernel cancelled the pending layers, so their resting GTC
+            // orders have to go with them. Left at the broker they would
+            // keep resting, could fill later and open a position the expert
+            // does not expect (the layer is cancelled, so the fill is
+            // refused and the position would stay unmanaged).
+            EaLiveCancelPendings(true, g_buySetup);
             EaLiveModifyStops(true, g_buySetup);
+           }
          EaWriteState();
         }
      }
@@ -1655,7 +1913,10 @@ void EaHandleDealClose(const bool isBuy, const int layer, const bool isTp)
         {
          EaLogEvent(false, g_sellSetup, ev);
          if(ev.type == EXEC_EVENT_TP1_LOCK)
+           {
+            EaLiveCancelPendings(false, g_sellSetup);
             EaLiveModifyStops(false, g_sellSetup);
+           }
          EaWriteState();
         }
      }
@@ -1677,9 +1938,24 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       return;
 
    const string comment = HistoryDealGetString(trans.deal, DEAL_COMMENT);
-   const int layer = EaLayerFromComment(comment);
+   int layer = EaLayerFromComment(comment);
    if(layer < 0)
-      return;
+     {
+      // A closing deal carries the broker's own comment ("[sl 4112.11]"),
+      // so the layer is recovered from the deal that opened the position.
+      layer = EaLayerFromPositionId(
+         HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID));
+      if(layer < 0)
+        {
+         // Still unmappable: the deal is reported instead of being dropped
+         // silently, because a position that cannot be mapped is a position
+         // nobody manages.
+         PrintFormat("ALPHA %s UNMAPPED deal=%I64u comment=%s entry=%d",
+                     InpInstanceTag, trans.deal, comment,
+                     (int)HistoryDealGetInteger(trans.deal, DEAL_ENTRY));
+         return;
+        }
+     }
    const bool isBuy = StringFind(comment, "ALPHA B L") == 0;
    const long entry = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
    const double price = HistoryDealGetDouble(trans.deal, DEAL_PRICE);

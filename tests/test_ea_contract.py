@@ -157,6 +157,145 @@ class ExpertContractTests(unittest.TestCase):
         self.assertIn("EaSideHoldsMarket(!isBuy)", arm)
         self.assertIn("EaLivePlaceBasket", arm)
 
+    def test_the_stop_modify_only_sends_a_request_that_changes_something(self):
+        # A layer that fills exactly at its limit price already carries the
+        # stop and the target of the order it was placed with. Sending the
+        # same values again is a no-op that the broker answers with 10025
+        # ("no changes"), which the expert logged as SLTP_FAIL - a false
+        # alarm on a completely normal event that hides real failures.
+        fn = self.source[self.source.index("void EaLiveModifyStops("):]
+        fn = fn[: fn.index("\n  }")]
+        # The position's current stop and target have to be read first.
+        self.assertIn("POSITION_SL", fn)
+        self.assertIn("POSITION_TP", fn)
+        # And the request may only go out when a value really differs.
+        self.assertRegex(fn, r"if\s*\(\s*!\w*changed\w*\s*\)\s*\n\s*continue;")
+        # A broker "no changes" answer must not be reported as a failure.
+        self.assertIn("TRADE_RETCODE_NO_CHANGES", fn)
+
+    def test_a_position_without_a_stop_always_gets_one(self):
+        # The skip must never leave a position unprotected: a position whose
+        # broker stop is 0 still needs the modify, so the comparison has to
+        # treat "no stop at all" as different.
+        fn = self.source[self.source.index("void EaLiveModifyStops("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertRegex(fn, r"currentSl\s*<=\s*0\.0|currentSl\s*==\s*0\.0")
+        self.assertRegex(fn, r"currentTp\s*<=\s*0\.0|currentTp\s*==\s*0\.0")
+
+    def test_a_rejected_order_cancels_its_layer(self):
+        # A layer whose order the broker rejected must not stay PENDING: a
+        # PENDING layer counts as "holding the market" in the one-side gate,
+        # so the direction would stay blocked until the POI level ages out
+        # of the map, and the state file would claim an order that does not
+        # exist at the broker.
+        fn = self.source[self.source.index("void EaLivePlaceBasket("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("ORDER_FAIL", fn)
+        self.assertIn("Exec_CancelLayer", fn)
+
+    def test_the_recovery_adopts_a_position_the_broker_already_filled(self):
+        # The state is written BEFORE the order goes out, so a terminal that
+        # dies between the fill and the next state write leaves a PENDING
+        # layer while the broker already holds the position. The recovery
+        # must adopt that position instead of refusing the live start,
+        # otherwise the open position is never managed.
+        fn = self.source[self.source.index("string EaValidateSide("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertNotIn("does not mark it filled", fn)
+        self.assertIn("adopt", fn.lower())
+
+    def test_a_state_that_is_ahead_of_the_broker_still_refuses_live(self):
+        # The opposite direction must keep refusing: the state says the
+        # layer is filled but the broker has no position, so the expert
+        # cannot know whether the position hit its target or its stop.
+        fn = self.source[self.source.index("string EaValidateSide("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("the broker has no position for it", fn)
+
+    def test_the_tp1_lock_deletes_the_pending_orders_at_the_broker(self):
+        # After TP1 the kernel marks the pending layers as cancelled, but the
+        # resting GTC orders must also be deleted at the broker. Otherwise
+        # they keep resting, can fill later, and open a position the expert
+        # does not expect (the layer is cancelled, so the fill is refused and
+        # the position stays unmanaged).
+        fn = self.source[self.source.index("void EaHandleDealClose("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EXEC_EVENT_TP1_LOCK", fn)
+        self.assertIn("EaLiveCancelPendings", fn)
+
+    def test_a_fill_that_cannot_be_mapped_to_a_layer_is_logged(self):
+        # The layer is recovered from the order comment. If a broker rewrites
+        # the comment, the fill cannot be mapped to its layer and the
+        # position would stay unmanaged - silently. The unmapped deal must
+        # be reported.
+        fn = self.source[self.source.index("void OnTradeTransaction("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EaLayerFromComment", fn)
+        self.assertRegex(fn, r"PrintFormat\([^;]*UNMAPPED")
+
+    def test_a_deal_is_mapped_to_its_layer_through_the_position(self):
+        # A closing deal does not carry the order comment: the broker writes
+        # its own ("[sl 4112.11]" / "[tp 4115.23]"). The layer must then be
+        # recovered from the deal that OPENED the position, otherwise the
+        # close is dropped, the basket never finishes in the expert's view,
+        # the state file goes stale and the next restart refuses the live
+        # start. Observed live on 2026-10-22.
+        self.assertIn("EaLayerFromPositionId", self.source)
+        fn = self.source[self.source.index("void OnTradeTransaction("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EaLayerFromPositionId", fn)
+        self.assertIn("DEAL_POSITION_ID", fn)
+        self.assertIn("DEAL_ENTRY_IN", fn)
+
+    def test_the_order_delete_checks_the_broker_retcode(self):
+        # OrderSend returns true for most server rejections; the failure is
+        # in the retcode. A delete that the broker refused must be reported
+        # and retried, or the order keeps resting while the expert believes
+        # it is gone.
+        fn = self.source[self.source.index("void EaLiveCancelPendings("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("TRADE_RETCODE_DONE", fn)
+        self.assertIn("ORDER_DELETE_FAIL", fn)
+        self.assertIn("g_deleteRetry", self.source)
+
+    def test_an_adopted_position_is_given_its_stop_and_target(self):
+        # The recovery adopts a position the broker filled while the expert
+        # was down. The stop and the target have to be recomputed from the
+        # real fill (the SL+ is measured from the own fill), and the stop
+        # has to be pushed to the broker.
+        fn = self.source[self.source.index("string EaValidateSide("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("Exec_ComputeSLPlus", fn)
+        self.assertIn("Exec_ComputeTP", fn)
+        self.assertIn("g_adoptedSide", self.source)
+        self.assertIn("EaLiveModifyStops", self.source)
+
+    def test_the_simulation_never_touches_a_setup_the_broker_still_holds(self):
+        # A refused live start means the state file and the broker disagree
+        # and the account may still hold real money. Simulating fills on that
+        # setup would overwrite the live state with a simulation.
+        self.assertIn("EaBrokerHoldsObjects", self.source)
+        fn = self.source[self.source.index("void EaProcessDirection("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EaBrokerHoldsObjects", fn)
+
+    def test_a_rejected_basket_leaves_no_phantom_layers(self):
+        # When the pre-flight refuses the basket, no order goes out. The
+        # layers must not stay PENDING, or the state file claims orders
+        # that do not exist and the direction stays blocked.
+        fn = self.source[self.source.index("void EaLivePlaceBasket("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EaAbandonBasket", fn)
+        self.assertIn("ARM rejected", fn)
+
+    def test_a_setup_waiting_for_the_retest_is_logged(self):
+        # A confirmed setup that waits for its retest must be visible, not
+        # only a setup that waits for its confirmation.
+        fn = self.source[self.source.index("void EaProcessDirection("):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EXEC_CONFIRMED", fn)
+        self.assertIn("bars_since_confirm", self.source)
+
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 

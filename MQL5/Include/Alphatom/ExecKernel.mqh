@@ -1180,11 +1180,18 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
       if(cancelReason == EXEC_REASON_NONE)
          return false;
       const int canceled = Exec_CancelPending(setup);
-      if(canceled <= 0)
-         return false;
-      // D-3: filled layers keep their own SL/TP; only pending layers die.
-      if(Exec_CountFilled(setup) == 0)
+      const int filled = Exec_CountFilled(setup);
+      if(canceled <= 0 && filled > 0)
+         return false;   // exposure only: that money is still managed
+      if(filled == 0)
+        {
+         // D-3: filled layers keep their own SL/TP; only pending layers die.
+         // A setup with no pending and no filled layer left must not stay
+         // ARMED: while it is armed it is "active", so that direction never
+         // starts a new setup again and stays dead until the terminal is
+         // restarted.
          setup.phase = EXEC_CANCELED;
+        }
       setup.skipReason = cancelReason;
       outEvent.type = EXEC_EVENT_CANCEL;
       outEvent.phase = setup.phase;

@@ -1029,6 +1029,34 @@ static void test_cancel_for_opposite_ignores_an_idle_setup() {
   CHECK(setup.phase == EXEC_IDLE);
 }
 
+// A basket whose orders the broker rejected has no pending and no filled
+// layer left. While such a setup stays ARMED it is "active", so the
+// direction never starts a new setup again: it is dead until the terminal
+// is restarted. The setup must die with a cancel event instead.
+static void test_armed_setup_without_any_layer_is_cancelled() {
+  const ExecConfig cfg = makeConfig();
+  const std::vector<MSNRBar> bars = buySeries();
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToArmed(bars, cfg, setup, ev);
+  CHECK(setup.phase == EXEC_ARMED);
+
+  // Every layer is cancelled, for example because the broker rejected the
+  // orders.
+  for (int i = 0; i < 3; ++i) CHECK(Exec_CancelLayer(setup, i));
+  CHECK(Exec_CountPending(setup) == 0);
+  CHECK(Exec_CountFilled(setup) == 0);
+
+  // The POI breaks: the setup must produce a cancel event and die.
+  const bool produced =
+      Exec_Advance(bars, (int)bars.size(), MSNR_STATE_BROKEN,
+                   MSNR_ROLE_SUPPORT, cfg, setup, ev);
+  CHECK(produced);
+  CHECK(ev.type == EXEC_EVENT_CANCEL);
+  CHECK(setup.phase == EXEC_CANCELED);
+  CHECK(!Exec_IsActive(setup));
+}
+
 
 static void test_missing_poi_cancels_a_setup_without_exposure() {
   const ExecConfig cfg = makeConfig();
@@ -1108,6 +1136,7 @@ int main() {
   test_cancel_for_opposite_stops_the_setup();
   test_cancel_for_opposite_keeps_a_filled_layer_alive();
   test_cancel_for_opposite_ignores_an_idle_setup();
+  test_armed_setup_without_any_layer_is_cancelled();
   test_missing_poi_cancels_a_setup_without_exposure();
   test_missing_poi_keeps_a_setup_with_exposure();
 
@@ -1115,6 +1144,6 @@ int main() {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("46 Exec kernel test groups passed\n");
+  std::printf("47 Exec kernel test groups passed\n");
   return 0;
 }
