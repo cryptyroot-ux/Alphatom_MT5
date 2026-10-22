@@ -20,6 +20,13 @@ inline int Exec_BarColour(const MSNRBar &bar)
    return 0;
   }
 
+// A zero-range bar carries no information: no touch, confirmation, retest
+// or break may be derived from it (frozen spec F-11).
+inline bool Exec_IsZeroRange(const MSNRBar &bar)
+  {
+   return (bar.high <= bar.low);
+  }
+
 // Earliest inverted FVG whose break bar is later than `afterIndex`.
 // A gap inverts when a candle CLOSES strictly beyond its far boundary
 // (body close, never a wick). A bullish gap closed below turns into a
@@ -62,6 +69,9 @@ bool Exec_DetectIFVG(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
          bool brokenBefore = false;
          for(int k = i + 2; k < j; ++k)
            {
+            // A zero-range bar carries no information (spec F-11).
+            if(Exec_IsZeroRange(MSNR_ARRAY_ELEMENT(bars, k)))
+               continue;
             const double close = MSNR_ARRAY_ELEMENT(bars, k).close;
             if(MSNR_IsBodyBreak(close, gap.lower, gap.upper, gapRole,
                                 breakTolerance))
@@ -71,6 +81,10 @@ bool Exec_DetectIFVG(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
               }
            }
          if(brokenBefore)
+            continue;
+
+         // The breaking bar itself must carry information (spec F-11).
+         if(Exec_IsZeroRange(MSNR_ARRAY_ELEMENT(bars, j)))
             continue;
 
          const double close = MSNR_ARRAY_ELEMENT(bars, j).close;
@@ -152,6 +166,11 @@ bool Exec_DetectCISD(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
         }
 
       if(!anchorValid || j <= afterIndex)
+         continue;
+
+      // The trigger bar must carry information: a zero-range bar cannot
+      // confirm anything (spec F-11).
+      if(Exec_IsZeroRange(MSNR_ARRAY_ELEMENT(bars, j)))
          continue;
 
       const double close = MSNR_ARRAY_ELEMENT(bars, j).close;
@@ -511,6 +530,7 @@ struct ExecConfig
    double riskCap;            // 0 = cap disabled
    int    tpPips[3];
    int    slPlusPips;
+   double gapTolerance;       // gap detection tolerance, 0 = exact gaps only
   };
 
 struct ExecSetup
@@ -927,6 +947,9 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
          return false;
       if(poiRole != setup.poiRole)
          return false;
+      // A zero-range bar carries no information (spec F-11).
+      if(Exec_IsZeroRange(last))
+         return false;
       if(!MSNR_TouchesZone(last.low, last.high, setup.poiLower,
                            setup.poiUpper, 0.0))
          return false;
@@ -979,7 +1002,8 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
                                                MSNR_ROLE_RESISTANCE;
       const bool hasIfvg = Exec_DetectIFVG(execBars, execCount,
                                            resolvedTouch, wantedRole,
-                                           0.0, 0.0, ifvgZone, ifvgIndex,
+                                           config.gapTolerance, 0.0,
+                                           ifvgZone, ifvgIndex,
                                            ifvgTime);
 
       double anchor = 0.0;
@@ -1097,6 +1121,9 @@ bool Exec_Advance(MSNR_ARRAY_PARAMETER(MSNRBar, execBars),
         }
 
       const bool retest = setup.isBuy ? (last.low <= e1) : (last.high >= e1);
+      // A zero-range bar carries no information (spec F-11).
+      if(Exec_IsZeroRange(last))
+         return false;
       if(!retest)
          return false;
 

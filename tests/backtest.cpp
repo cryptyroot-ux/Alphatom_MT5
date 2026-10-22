@@ -226,6 +226,9 @@ ExecConfig makeExecConfig(const Options &opt) {
   cfg.tpPips[1] = 50;
   cfg.tpPips[2] = 100;
   cfg.slPlusPips = 10;
+  // The same gap tolerance the expert uses (InpGapToleranceTicks = 2), so
+  // the harness detects the same inversions as the live expert.
+  cfg.gapTolerance = 2 * cfg.tickSize;
   return cfg;
 }
 

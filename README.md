@@ -195,7 +195,7 @@ ALPHA A probe trade flags: terminalAllowed=1 mqlAllowed=1 accountTradeMode=2
 retcode 10027 (*AutoTrading disabled by client*).
 
 **Restart recovery.** The expert persists both setups in
-`MQL5/Files/Alphatom_state.csv`, so a terminal restart does not leave open
+`MQL5/Files/Alphatom_state_<symbol>_<magic>.csv`, so a terminal restart does not leave open
 positions unmanaged. The restored state is checked against the broker in both
 directions: a position or resting order that the state does not know about, or
 a layer the state calls filled without a matching position, refuses the live

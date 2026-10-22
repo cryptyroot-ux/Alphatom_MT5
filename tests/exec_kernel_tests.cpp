@@ -1026,8 +1026,7 @@ static void test_cancel_for_opposite_ignores_an_idle_setup() {
   Exec_ClearSetup(setup);
   ExecEvent ev{};
   CHECK(!Exec_CancelForOpposite(setup, ev));
-  CHECK(setup.phase == EXEC_IDLE);
-}
+  CHECK(setup.phase == EXEC_IDLE);}
 
 // A basket whose orders the broker rejected has no pending and no filled
 // layer left. While such a setup stays ARMED it is "active", so the
@@ -1055,6 +1054,53 @@ static void test_armed_setup_without_any_layer_is_cancelled() {
   CHECK(ev.type == EXEC_EVENT_CANCEL);
   CHECK(setup.phase == EXEC_CANCELED);
   CHECK(!Exec_IsActive(setup));
+}
+
+// A zero-range bar carries no information: it may not start a setup, it may
+// not confirm one and it may not invert a gap (frozen spec F-11).
+
+static void test_a_zero_range_bar_cannot_start_a_setup() {
+  const ExecConfig cfg = makeConfig();
+  // The only bar sits inside the POI 4119-4120 but has no range at all.
+  const std::vector<MSNRBar> bars{bar(4119.50, 4119.50, 4119.50, 4119.50)};
+  ExecSetup setup{};
+  ExecEvent ev{};
+  CHECK(Exec_InitSetup(setup, true, MSNR_ROLE_SUPPORT, 4119.0, 4120.0, 15));
+  CHECK(!advance(bars, 1, MSNR_STATE_FRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(setup.phase == EXEC_IDLE);
+  CHECK(ev.type == EXEC_EVENT_NONE);
+}
+
+static void test_a_zero_range_bar_cannot_invert_a_gap() {
+  // Bullish FVG at [101,105] and then a flat bar at 100: its close is below
+  // the far boundary, so without the filter it would invert the gap.
+  const std::vector<MSNRBar> bars{bar(100, 101, 99, 100), bar(102, 104, 101, 103),
+                                  bar(106, 108, 105, 107), bar(100, 100, 100, 100)};
+  MSNRZone zone{};
+  int index = -1;
+  long time = 0;
+  CHECK(!Exec_DetectIFVG(bars, static_cast<int>(bars.size()), -1,
+                         MSNR_ROLE_RESISTANCE, 0.0, 0.0, zone, index, time));
+  // The same bars with a real range do invert the gap.
+  std::vector<MSNRBar> withRange = bars;
+  withRange[3] = bar(100, 101, 99, 100);
+  CHECK(Exec_DetectIFVG(withRange, static_cast<int>(withRange.size()), -1,
+                        MSNR_ROLE_RESISTANCE, 0.0, 0.0, zone, index, time));
+}
+
+static void test_a_zero_range_bar_cannot_retest() {
+  const ExecConfig cfg = makeConfig();
+  std::vector<MSNRBar> bars = buySeries();
+  // Bar 6 is the retest bar; it reaches E1 but has no range.
+  bars[6] = bar(4120.50, 4120.50, 4120.50, 4120.50);
+  ExecSetup setup{};
+  ExecEvent ev{};
+  driveBuyToConfirmed(bars, cfg, setup, ev);
+  CHECK(!advance(bars, 7, MSNR_STATE_UNFRESH, MSNR_ROLE_SUPPORT, cfg, setup,
+                     ev));
+  CHECK(setup.phase == EXEC_CONFIRMED);
+  CHECK(setup.layerState[0] == EXEC_LAYER_NONE);
 }
 
 
@@ -1137,6 +1183,9 @@ int main() {
   test_cancel_for_opposite_keeps_a_filled_layer_alive();
   test_cancel_for_opposite_ignores_an_idle_setup();
   test_armed_setup_without_any_layer_is_cancelled();
+  test_a_zero_range_bar_cannot_start_a_setup();
+  test_a_zero_range_bar_cannot_invert_a_gap();
+  test_a_zero_range_bar_cannot_retest();
   test_missing_poi_cancels_a_setup_without_exposure();
   test_missing_poi_keeps_a_setup_with_exposure();
 
@@ -1144,6 +1193,6 @@ int main() {
     std::fprintf(stderr, "%d Exec kernel check(s) failed\n", failures);
     return 1;
   }
-  std::printf("47 Exec kernel test groups passed\n");
+  std::printf("50 Exec kernel test groups passed\n");
   return 0;
 }

@@ -69,9 +69,10 @@ systemctl start mt5-terminal.service
 
 ## 5. Restart recovery
 
-The expert persists both setups in `MQL5/Files/Alphatom_state.csv` (one CSV row
-per direction, 39 columns, a shared index table for the writer and the parser).
-The state is written
+The expert persists both setups in `MQL5/Files/Alphatom_state_<symbol>_<magic>.csv`
+(one CSV row per direction, 39 columns, a shared index table for the writer and
+the parser). The name carries the symbol and the magic, so two instances of
+the expert cannot overwrite each other's state. The state is written
 
 * right before the basket goes out (so a crash between the write and the
   order still leaves a consistent state),
@@ -94,6 +95,27 @@ the previous run left behind.
 
 Markers in the log: `recovery: N setup(s) restored`, `live start refused: ...;
 running shadow`.
+
+### 5.0 When the live start is refused because the state is ahead of the broker
+
+The frozen spec makes the expert refuse the live start when the state file
+disagrees with the broker. The most common case is a position that was closed
+by the broker while the expert was down: the state still calls the layer
+*filled*, the broker has no position any more, so the expert does not know
+whether it hit its target or its stop and stays in shadow.
+
+The state file is a **runtime artifact** written by the expert. Once the
+account is flat again (no position and no resting order of this magic) the
+stale row can simply be removed — with the terminal stopped:
+
+```bash
+systemctl stop mt5-terminal.service
+rm -f "<MT5 data folder>/MQL5/Files/Alphatom_state_<symbol>_<magic>.csv"
+systemctl start mt5-terminal.service
+```
+
+Do **not** do this while a position or a resting order of this magic is open:
+the state file is the only link between the expert and the broker's objects.
 
 ### 5.1 The expert waits for the broker connection (2026-10-22)
 
@@ -120,14 +142,14 @@ start-up looks like this:
 
 ```
 09:15:05  ALPHA A ready: the terminal is synchronized with the broker
-09:15:05  ALPHA A recovery: 1 setup(s) restored from Alphatom_state.csv (buy=IDLE sell=CONFIRMED)
+09:15:05  ALPHA A recovery: 1 setup(s) restored from Alphatom_state_XAUUSDc_20261021.csv (buy=IDLE sell=CONFIRMED)
 09:15:09  ALPHA A init: shadow=false exec=PERIOD_M1 magic=20261021 ...
 ```
 
 A **permanently** wrong account type (a non-hedging account) still refuses the
 start-up, because no amount of waiting can fix it.
 
-**How to tell that the expert is alive:** `MQL5/Files/Alphatom_state.csv` is
+**How to tell that the expert is alive:** `MQL5/Files/Alphatom_state_<symbol>_<magic>.csv` is
 rewritten on every closed bar. If its timestamp stops moving, the expert is not
 running — check the journal for `failed with code 1` / `removed`, and check that
 the chart still carries the `<expert>` block (a removed expert is not restored

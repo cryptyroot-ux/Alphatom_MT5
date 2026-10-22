@@ -319,6 +319,11 @@ void EaBuildConfig()
    g_cfg.tpPips[1] = InpTp2Pips;
    g_cfg.tpPips[2] = InpTp3Pips;
    g_cfg.slPlusPips = InpSlPlusPips;
+   // The gap detection must use the same tolerance as the POI map, so a gap
+   // the chart draws as a fair-value gap is also the gap the expert
+   // inverts.
+   g_cfg.gapTolerance = InpGapToleranceTicks *
+                        SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
   }
 
 void EaBuildPoiParams(MSNRParams &params)
@@ -1188,6 +1193,14 @@ void EaLogHeartbeat()
 //+------------------------------------------------------------------+
 #define EA_STATE_FILE "Alphatom_state.csv"
 
+// The state file name carries the symbol and the magic, so two instances of
+// the expert (two symbols, or the same symbol twice) cannot overwrite each
+// other's state and restore a setup whose levels belong to another chart.
+string EaStateFileName()
+  {
+   return StringFormat("Alphatom_state_%s_%I64d.csv", _Symbol, InpMagic);
+  }
+
 // The persisted state row: one row per direction. The column indexes are
 // shared by the writer and the parser, and the field count is verified at
 // runtime, so a format change can never fail silently.
@@ -1280,12 +1293,12 @@ string EaStateRow(const bool isBuy, const ExecSetup &setup, const EaLink &link)
 
 void EaWriteState()
   {
-   const int handle = FileOpen(EA_STATE_FILE, FILE_WRITE | FILE_TXT |
+   const int handle = FileOpen(EaStateFileName(), FILE_WRITE | FILE_TXT |
                                 FILE_ANSI);
    if(handle == INVALID_HANDLE)
      {
       PrintFormat("ALPHA %s state: cannot write %s (error %d)", InpInstanceTag,
-                  EA_STATE_FILE, GetLastError());
+                  EaStateFileName(), GetLastError());
       return;
      }
    FileWriteString(handle, "# alphatom state v1\r\n");
@@ -1365,7 +1378,7 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
   {
    outBuyRestored = false;
    outSellRestored = false;
-   const int handle = FileOpen(EA_STATE_FILE, FILE_READ | FILE_TXT |
+   const int handle = FileOpen(EaStateFileName(), FILE_READ | FILE_TXT |
                                 FILE_ANSI);
    if(handle == INVALID_HANDLE)
       return 0;
@@ -1388,7 +1401,7 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
       if(!EaParseStateRow(line, isBuy, setup, link))
         {
          PrintFormat("ALPHA %s state: cannot parse a row of %s", InpInstanceTag,
-                     EA_STATE_FILE);
+                     EaStateFileName());
          continue;
         }
       if(isBuy)
@@ -1408,7 +1421,7 @@ int EaReadState(bool &outBuyRestored, bool &outSellRestored)
    FileClose(handle);
    if(restored == 0 && rows > 0)
       PrintFormat("ALPHA %s state: %s holds %d row(s) but none could be restored",
-                  InpInstanceTag, EA_STATE_FILE, rows);
+                  InpInstanceTag, EaStateFileName(), rows);
    return restored;
   }
 
@@ -1563,6 +1576,9 @@ bool EaOnClosedBar()
    EaRefreshAllPoi();
    if(!EaCopyExecBars())
       return false;
+   // The contract specification can change during the session, so the
+   // config is rebuilt from the live symbol on every bar.
+   EaBuildConfig();
    EaProcessDirection(true, g_buySetup, g_buyLink);
    EaProcessDirection(false, g_sellSetup, g_sellLink);
    EaWriteState();
@@ -1700,7 +1716,7 @@ void EaInitLive()
    const int restored = EaReadState(buyRestored, sellRestored);
    if(restored > 0)
       PrintFormat("ALPHA %s recovery: %d setup(s) restored from %s (buy=%s sell=%s)",
-                  InpInstanceTag, restored, EA_STATE_FILE,
+                  InpInstanceTag, restored, EaStateFileName(),
                   EaPhaseName(g_buySetup.phase), EaPhaseName(g_sellSetup.phase));
 
    g_liveAllowed = !InpShadowMode;

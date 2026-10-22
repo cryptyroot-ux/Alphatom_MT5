@@ -296,6 +296,24 @@ class ExpertContractTests(unittest.TestCase):
         self.assertIn("EXEC_CONFIRMED", fn)
         self.assertIn("bars_since_confirm", self.source)
 
+    def test_the_state_file_is_named_after_the_symbol_and_the_magic(self):
+        # Two instances of the expert (two symbols, or the same symbol twice)
+        # must not overwrite each other's state and restore a setup whose
+        # price levels belong to another chart.
+        self.assertIn("EaStateFileName", self.source)
+        fn = self.source[self.source.index("string EaStateFileName()"):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("_Symbol", fn)
+        self.assertIn("InpMagic", fn)
+
+    def test_the_config_is_rebuilt_from_the_live_symbol(self):
+        # The contract specification can change during the session, so the
+        # tick size and the money-per-pip may not stay stale for the whole
+        # session.
+        fn = self.source[self.source.index("bool EaOnClosedBar()"):]
+        fn = fn[: fn.index("\n  }")]
+        self.assertIn("EaBuildConfig()", fn)
+
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 
