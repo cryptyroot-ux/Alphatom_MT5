@@ -134,6 +134,45 @@ class ExpertContractTests(unittest.TestCase):
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 
+    def test_init_does_not_die_when_the_broker_is_not_connected_yet(self):
+        # The terminal initialises the expert while the broker connection is
+        # still being established, so SYMBOL_TRADE_TICK_SIZE / CONTRACT_SIZE
+        # and the account margin mode can still be unknown. Returning
+        # INIT_FAILED there makes MT5 remove the expert from the chart for the
+        # rest of the session - it is never re-attached - which silently
+        # stops the whole strategy after every terminal restart.
+        # The expert must wait for the connection instead of dying.
+        init = self.source[self.source.index("int OnInit()"):]
+        init = init[: init.index("\n  }")]
+        self.assertNotRegex(
+            init,
+            r"if\s*\(\s*!EaSymbolReady\(\)\s*\)\s*\n\s*return INIT_FAILED;",
+        )
+        self.assertIn("waiting for the broker connection", init)
+        self.assertIn("EventSetTimer", init)
+
+    def test_recovery_runs_only_after_the_broker_state_is_known(self):
+        # The recovery validation compares the state file with the broker's
+        # positions and resting orders. Before the terminal is in sync those
+        # queries return nothing, so the validation would wrongly cancel
+        # layers or refuse live. It must be deferred until the connection
+        # is established, and the live gate must stay closed until then.
+        self.assertIn("EaInitLive", self.source)
+        self.assertIn("g_symbolReady", self.source)
+        self.assertIn("EaTryBecomeReady", self.source)
+        # The live gate is still the input flag plus the runtime flag.
+        self.assertRegex(self.source, r"return\s*!InpShadowMode\s*&&\s*g_liveAllowed\s*;")
+        # g_liveAllowed only becomes true inside EaInitLive.
+        body = self.source[self.source.index("void EaInitLive()"):]
+        body = body[: body.index("\n  }")]
+        self.assertIn("g_liveAllowed = !InpShadowMode;", body)
+
+    def test_init_may_still_refuse_a_permanent_configuration_error(self):
+        # A genuinely wrong account type is a permanent error and must still
+        # stop the expert instead of retrying for ever.
+        self.assertIn("hedging account required", self.source)
+        self.assertRegex(self.source, r"INIT_FAILED;")
+
 
 if __name__ == "__main__":
     unittest.main()

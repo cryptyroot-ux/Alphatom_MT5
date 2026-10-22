@@ -93,6 +93,15 @@ bool g_liveAllowed = false;
 bool g_stateWarned = false;
 int  g_closedBars = 0;
 
+// The terminal initialises the expert while the broker connection is still
+// being established. The symbol specification and the account state are only
+// known once the terminal is in sync, and MT5 removes an expert whose
+// OnInit returns INIT_FAILED without ever re-attaching it. The expert
+// therefore waits for the connection instead of dying.
+bool g_symbolReady = false;
+bool g_liveInitDone = false;
+bool g_hedgeRefused = false;
+
 //+------------------------------------------------------------------+
 //| Small helpers                                                    |
 //+------------------------------------------------------------------+
@@ -1366,6 +1375,29 @@ void EaLogRuntimeProbe()
 //+------------------------------------------------------------------+
 //| Init                                                             |
 //+------------------------------------------------------------------+
+// The broker's symbol specification: available as soon as the terminal
+// has synchronized with the server.
+bool EaSymbolPropertiesReady()
+  {
+   const double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   const double contract = SymbolInfoDouble(_Symbol,
+                                          SYMBOL_TRADE_CONTRACT_SIZE);
+   return (tickSize > 0.0 && contract > 0.0);
+  }
+
+// The account is known once the terminal has authorized it.
+bool EaAccountKnown()
+  {
+   return AccountInfoInteger(ACCOUNT_LOGIN) > 0;
+  }
+
+bool EaAccountIsHedging()
+  {
+   const ENUM_ACCOUNT_MARGIN_MODE mode =
+      (ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+   return (mode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
+  }
+
 bool EaSymbolReady()
   {
    if(!SymbolSelect(_Symbol, true))
@@ -1408,29 +1440,16 @@ int EaCountOwnPositions()
    return count;
   }
 
-int OnInit()
+// The live half of the start-up: build the config, restore the setups from
+// the state file and check them against the broker. It may only run once the
+// terminal is in sync, because the broker's positions and resting orders are
+// only known then.
+void EaInitLive()
   {
-   if(InpExecTimeframe != PERIOD_M1 && InpExecTimeframe != PERIOD_M2 && InpExecTimeframe != PERIOD_M3)
-     {
-      Print("ALPHA init refused: execution timeframe must be M1, M2 or M3");
-      return INIT_PARAMETERS_INCORRECT;
-     }
-   if(InpLotsPerLayer <= 0.0 || InpTp1Pips <= 0 || InpTp2Pips <= 0 ||
-      InpTp3Pips <= 0 || InpSlPlusPips <= 0 || InpSlCapPips <= 0.0 ||
-      InpMinZoneWidthTicks < 1 || InpCisdZoneMinWidth < 0.0 ||
-      InpCisdZoneMaxWidth <= 0.0 || InpCISDMinRun < 1 ||
-      InpSlBufferTicks < 0)
-     {
-      Print("ALPHA init refused: invalid strategy inputs");
-      return INIT_PARAMETERS_INCORRECT;
-     }
-   if(!EaSymbolReady())
-      return INIT_FAILED;
+   if(g_liveInitDone)
+      return;
+   g_liveInitDone = true;
 
-   Exec_ClearSetup(g_buySetup);
-   Exec_ClearSetup(g_sellSetup);
-   EaClearLink(g_buyLink);
-   EaClearLink(g_sellLink);
    EaBuildConfig();
 
    // Restart recovery: rebuild the setups from the state file and check them
@@ -1468,14 +1487,100 @@ int OnInit()
                SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE),
                EaMoneyPerPipPerLot(),
                AccountInfoString(ACCOUNT_CURRENCY));
+  }
+
+// Become live as soon as the terminal is in sync. Returns false while the
+// connection is still pending.
+bool EaTryBecomeReady()
+  {
+   if(g_symbolReady)
+      return true;
+   if(!SymbolSelect(_Symbol, true))
+      return false;
+   if(!EaSymbolPropertiesReady() || !EaAccountKnown())
+      return false;
+   if(!EaAccountIsHedging())
+     {
+      if(!g_hedgeRefused)
+        {
+         g_hedgeRefused = true;
+         Print("ALPHA init refused: hedging account required for three independent layers");
+        }
+      return false;
+     }
+   g_symbolReady = true;
+   EventKillTimer();
+   PrintFormat("ALPHA %s ready: the terminal is synchronized with the broker", InpInstanceTag);
+   EaInitLive();
+   return true;
+  }
+
+int OnInit()
+  {
+   if(InpExecTimeframe != PERIOD_M1 && InpExecTimeframe != PERIOD_M2 && InpExecTimeframe != PERIOD_M3)
+     {
+      Print("ALPHA init refused: execution timeframe must be M1, M2 or M3");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   if(InpLotsPerLayer <= 0.0 || InpTp1Pips <= 0 || InpTp2Pips <= 0 ||
+      InpTp3Pips <= 0 || InpSlPlusPips <= 0 || InpSlCapPips <= 0.0 ||
+      InpMinZoneWidthTicks < 1 || InpCisdZoneMinWidth < 0.0 ||
+      InpCisdZoneMaxWidth <= 0.0 || InpCISDMinRun < 1 ||
+      InpSlBufferTicks < 0)
+     {
+      Print("ALPHA init refused: invalid strategy inputs");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+
+   Exec_ClearSetup(g_buySetup);
+   Exec_ClearSetup(g_sellSetup);
+   EaClearLink(g_buyLink);
+   EaClearLink(g_sellLink);
+   g_symbolReady = false;
+   g_liveInitDone = false;
+   g_liveAllowed = false;
+
+   // The terminal may still be connecting to the broker. The symbol
+   // specification and the account state are unknown until it is, and dying
+   // here would remove the expert from the chart for the rest of the
+   // session without any visible reason.
+   EventSetTimer(5);
+
+   if(EaAccountKnown() && !EaAccountIsHedging())
+     {
+      Print("ALPHA init refused: hedging account required for three independent layers");
+      EventKillTimer();
+      return INIT_FAILED;
+     }
+   if(!EaSymbolPropertiesReady() || !EaAccountKnown())
+     {
+      Print("ALPHA init: waiting for the broker connection before the symbol data is available");
+      return INIT_SUCCEEDED;
+     }
+   if(!EaTryBecomeReady())
+     {
+      EventKillTimer();
+      return INIT_FAILED;
+     }
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
+   EventKillTimer();
    PrintFormat("ALPHA %s stop: reason=%d buy=%s sell=%s",
                InpInstanceTag, reason, EaPhaseName(g_buySetup.phase),
                EaPhaseName(g_sellSetup.phase));
+  }
+
+//+------------------------------------------------------------------+
+//| Timer: wake up while the terminal is still connecting           |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   if(g_symbolReady)
+      return;
+   EaTryBecomeReady();
   }
 
 //+------------------------------------------------------------------+
@@ -1483,6 +1588,8 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   if(!g_symbolReady && !EaTryBecomeReady())
+      return;
    const datetime open = iTime(_Symbol, InpExecTimeframe, 0);
    if(open == 0)
       return;

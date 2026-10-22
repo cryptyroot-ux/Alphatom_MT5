@@ -32,6 +32,7 @@
 namespace {
 
 const bool kDebug = true;
+bool g_trace = false;   // verbose touch/confirm/arm/fill/close timeline
 
 struct Bar {
   long time = 0;
@@ -54,6 +55,7 @@ struct Options {
   int windowSize = 399;      // closed execution bars, as in the expert
   int execTf = 0;            // 0 = M1, 1 = M2, 2 = M3
   int poiTfOnly = -1;        // -1 = all, 0 = M15, 1 = M30, 2 = H1
+  bool trace = false;         // print the touch -> confirm -> retest -> arm timeline
 };
 
 struct Bucket {
@@ -86,6 +88,14 @@ struct Bucket {
   double pips = 0.0;
   long holdBarsSum = 0;
   int holdCount = 0;
+  // Retest instrumentation: how long the setup waited between the confirmation
+  // bar and the retest bar that armed it.
+  int retestLatSum = 0;        // exec bars between confirm and arm
+  int retestLatCount = 0;
+  int retestLatMax = 0;
+  int retestHist[5] = {0, 0, 0, 0, 0};   // 1, 2, 3-5, 6-15, >15 bars
+  double retestGapSum = 0.0;    // pips the retest bar had to travel to reach E1
+  int retestGapCount = 0;
 };
 
 struct Trade {
@@ -108,6 +118,8 @@ struct Side {
   int linkTf = -1;
   MSNRState lastState = MSNR_STATE_FRESH;
   long fillTime[3] = {0, 0, 0};
+  long confirmTime = 0;         // time of the confirmation bar, for retest latency
+  ExecLayerState printedState[3] = {EXEC_LAYER_NONE, EXEC_LAYER_NONE, EXEC_LAYER_NONE};
 };
 
 struct Context {
@@ -301,6 +313,10 @@ void simulateBar(const bool isBuy, const int dir, ExecSetup &setup, Side &side,
     if (Exec_RecordFill(setup, i, setup.layers[i], cfg, ev)) {
       ctx.total.fills++; ctx.byDirection[dir].fills++; ctx.byPoiTf[tf].fills++;
       side.fillTime[i] = last.time;
+      if (g_trace)
+        std::printf("[trace]   FILL  %-4s layer=%d price=%.5f sl=%.5f tp=%.5f at=%ld\n",
+                    isBuy ? "BUY" : "SELL", i, setup.layers[i], setup.stops[i], setup.tp[i],
+                    static_cast<long>(last.time));
     }
   }
   for (int i = 0; i < 3; ++i) {
@@ -315,6 +331,10 @@ void simulateBar(const bool isBuy, const int dir, ExecSetup &setup, Side &side,
     const bool tp1 = (i == 0 && isTp);
     if (!Exec_RecordClose(setup, i, isTp, ev)) continue;
     if (tp1) { ctx.total.tp1++; ctx.byDirection[dir].tp1++; }
+    if (g_trace)
+      std::printf("[trace]   CLOSE %-4s layer=%d entry=%.5f exit=%.5f %s at=%ld\n",
+                  isBuy ? "BUY" : "SELL", i, entry, exitPrice, isTp ? "TP" : "SL",
+                  static_cast<long>(last.time));
     recordClose(ctx, isBuy, dir, tf, confirmKind, entry, exitPrice, isTp, held, now, cfg);
   }
 }
@@ -338,7 +358,9 @@ int main(int argc, char **argv) {
     else if (a == "--window" && hasNext) opt.windowSize = std::atoi(argv[++i]);
     else if (a == "--tf" && hasNext) opt.execTf = std::atoi(argv[++i]);
     else if (a == "--poi-tf" && hasNext) opt.poiTfOnly = std::atoi(argv[++i]);
+    else if (a == "--trace") opt.trace = true;
   }
+  g_trace = opt.trace;
 
   std::vector<Bar> m1;
   std::vector<Bar> poiM15, poiM30, poiH1;
@@ -534,6 +556,19 @@ int main(int argc, char **argv) {
       const int tf = side.linkTf;
       const bool wasArmed = (setup.phase == EXEC_ARMED || setup.phase == EXEC_MANAGING);
       const int confirmKind = setup.confirmKind;
+      if (g_trace && wasArmed &&
+          (setup.layerState[0] != side.printedState[0] ||
+           setup.layerState[1] != side.printedState[1] ||
+           setup.layerState[2] != side.printedState[2])) {
+        side.printedState[0] = setup.layerState[0];
+        side.printedState[1] = setup.layerState[1];
+        side.printedState[2] = setup.layerState[2];
+        std::printf("[trace]   ARMED %ld %s L=%.5f/%.5f/%.5f stop=%.5f st=%d/%d/%d last=%.5f/%.5f\n",
+                    static_cast<long>(last.time), isBuy ? "BUY" : "SELL",
+                    setup.layers[0], setup.layers[1], setup.layers[2], setup.initialSL,
+                    (int)setup.layerState[0], (int)setup.layerState[1], (int)setup.layerState[2],
+                    last.low, last.high);
+      }
 
       const bool produced = Exec_Advance(window, static_cast<int>(window.size()),
                                          poiState, poiRole, cfg, setup, ev);
@@ -547,6 +582,15 @@ int main(int argc, char **argv) {
       if (ev.type == EXEC_EVENT_CONFIRM) {
         ctx.total.confirms++; ctx.byDirection[dir].confirms++;
         ctx.byPoiTf[tf].confirms++; ctx.byConfirm[setup.confirmKind].confirms++;
+        side.confirmTime = ev.time;
+        if (opt.trace)
+          std::printf("[trace] %-4s poi=%-4s CONFIRM touch=%ld confirm=%ld kind=%d poi_low=%.5f poi_up=%.5f zone=%.5f-%.5f\n",
+                      isBuy ? "BUY" : "SELL",
+                      tf == 0 ? "M15" : (tf == 1 ? "M30" : "H60"),
+                      static_cast<long>(setup.touchTime),
+                      static_cast<long>(setup.confirmTime), setup.confirmKind,
+                      setup.poiLower, setup.poiUpper,
+                      setup.entryZone.lower, setup.entryZone.upper);
         continue;
       }
       if (ev.type == EXEC_EVENT_ARM) {
@@ -570,6 +614,37 @@ int main(int argc, char **argv) {
         }
         ctx.total.arms++; ctx.byDirection[dir].arms++;
         ctx.byPoiTf[tf].arms++; ctx.byConfirm[setup.confirmKind].arms++;
+        {
+          // Retest latency: exec bars between the confirmation bar and the
+          // retest bar that armed the setup.
+          if (side.confirmTime > 0 && ev.time >= side.confirmTime) {
+            const int barSec = (opt.execTf == 0) ? 60 : ((opt.execTf == 1) ? 120 : 180);
+            const int lat = (int)((ev.time - side.confirmTime) / barSec);
+            ctx.total.retestLatSum += lat; ctx.total.retestLatCount++;
+            ctx.byDirection[dir].retestLatSum += lat; ctx.byDirection[dir].retestLatCount++;
+            if (lat > ctx.total.retestLatMax) ctx.total.retestLatMax = lat;
+            int bin = 0;
+            if (lat <= 1) bin = 0; else if (lat == 2) bin = 1; else if (lat <= 5) bin = 2;
+            else if (lat <= 15) bin = 3; else bin = 4;
+            ctx.total.retestHist[bin]++;
+            // How far the market still had to travel to reach E1.
+            const double e1 = setup.layers[0];
+            const double prevClose = window[window.size() - 2].close;
+            const double gap = isBuy ? (prevClose - e1) : (e1 - prevClose);
+            ctx.total.retestGapSum += gap / EXEC_PIP_SIZE; ctx.total.retestGapCount++;
+            if (opt.trace) {
+              std::printf("[trace] %-4s poi=%-4s conf=%-4s touch=%ld confirm=%ld arm=%ld"
+                          " lat=%dbars gap=%.1fpips e1=%.5f sl=%.5f tp1=%.5f\n",
+                          isBuy ? "BUY" : "SELL",
+                          tf == 0 ? "M15" : (tf == 1 ? "M30" : "H60"),
+                          setup.confirmKind == 0 ? "IFVG" : "CISD",
+                          static_cast<long>(setup.touchTime),
+                          static_cast<long>(setup.confirmTime),
+                          static_cast<long>(ev.time), lat, gap / EXEC_PIP_SIZE,
+                          setup.layers[0], setup.initialSL, setup.tp[0]);
+            }
+          }
+        }
         {
           // The distance from E1 to the shared stop, in pips, and whether the
           // 50 pip cap actually bound.
@@ -613,6 +688,12 @@ int main(int argc, char **argv) {
   std::printf("cancelled_opposite=%d skipped_risk_cap=%d poi_gone=%d tp1_hits=%d\n",
               t.cancelledOpp, t.skippedCap, t.poiGone, t.tp1);
   std::printf("debug: gate_blocks=%ld gate_cancels=%ld starts=%ld\n", gateBlocks, gateCancels, starts);
+  std::printf("retest: latency avg=%.1f bars max=%d | hist 1bar=%d 2bars=%d 3-5=%d 6-15=%d >15=%d"
+              " | gap to E1 avg=%.1f pips\n",
+              t.retestLatCount ? (double)t.retestLatSum / t.retestLatCount : 0.0,
+              t.retestLatMax,
+              t.retestHist[0], t.retestHist[1], t.retestHist[2], t.retestHist[3], t.retestHist[4],
+              t.retestGapCount ? t.retestGapSum / t.retestGapCount : 0.0);
   std::printf("gross=%.2f loss=%.2f net=%.2f USC  (%.1f pips)\n",
               t.grossProfit, t.grossLoss, t.net, t.pips);
   if (t.grossLoss > 0.0)
