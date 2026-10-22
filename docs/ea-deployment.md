@@ -95,6 +95,45 @@ the previous run left behind.
 Markers in the log: `recovery: N setup(s) restored`, `live start refused: ...;
 running shadow`.
 
+### 5.1 The expert waits for the broker connection (2026-10-22)
+
+The terminal initialises an expert **while the broker connection is still being
+established**. The symbol specification (`SYMBOL_TRADE_TICK_SIZE`,
+`SYMBOL_TRADE_CONTRACT_SIZE`) and the account margin mode are unknown at that
+moment.
+
+`OnInit` used to refuse the start-up in that case, and **MT5 removes an expert
+whose `OnInit` fails and never re-attaches it** — so after every terminal
+restart the whole strategy stopped silently. Live evidence (2026-10-22):
+
+```
+08:07:30  Experts  expert Alphatom_EA (XAUUSDc,H1) loaded successfully
+08:07:35  Experts  initializing of Alphatom_EA (XAUUSDc,H1) failed with code 1
+08:07:35  Experts  expert Alphatom_EA (XAUUSDc,H1) removed
+```
+
+The expert now **waits** instead of dying: `OnInit` returns `INIT_SUCCEEDED`,
+a 5-second timer retries the check, and the restart recovery runs only once the
+terminal is in sync (the recovery compares the state file with the broker's
+positions and resting orders, which are only known after the sync). The healthy
+start-up looks like this:
+
+```
+09:15:05  ALPHA A ready: the terminal is synchronized with the broker
+09:15:05  ALPHA A recovery: 1 setup(s) restored from Alphatom_state.csv (buy=IDLE sell=CONFIRMED)
+09:15:09  ALPHA A init: shadow=false exec=PERIOD_M1 magic=20261021 ...
+```
+
+A **permanently** wrong account type (a non-hedging account) still refuses the
+start-up, because no amount of waiting can fix it.
+
+**How to tell that the expert is alive:** `MQL5/Files/Alphatom_state.csv` is
+rewritten on every closed bar. If its timestamp stops moving, the expert is not
+running — check the journal for `failed with code 1` / `removed`, and check that
+the chart still carries the `<expert>` block (a removed expert is not restored
+by a terminal restart on its own; the chart file must be edited while the
+terminal is stopped, see §3).
+
 ## 6. Live order path (what happens on ARM)
 
 1. The arming bar closes → the basket is placed.
@@ -108,9 +147,8 @@ running shadow`.
 5. Fills and closes are reconciled in `OnTradeTransaction`; the comment
    (`ALPHA B L0` / `ALPHA S L2`) maps a deal back to its layer.
 
-Orders carry magic `20261021`. A live start with existing positions of this
-magic is refused and downgraded to shadow, because restart recovery is not
-implemented yet.
+Orders carry magic `20261021`. A live start whose broker state does not match
+the state file is refused and downgraded to shadow (§5).
 
 ## 7. Diagnostics
 
