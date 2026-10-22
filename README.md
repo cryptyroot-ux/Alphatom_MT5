@@ -19,8 +19,8 @@ executable test suite.
 > liability for trading losses.
 >
 > **Measured result.** The long backtest over 13.5 months of real broker data
-> (21 015 positions) shows that **this specification has no edge**: profit
-> factor 0.900, expectancy −1.95 USC per position, peak drawdown 45 711 USC.
+> (21 037 positions) shows that **this specification has no edge**: profit
+> factor 0.901, expectancy −1.94 USC per position, peak drawdown 46 086 USC.
 > Every variant tried (spread 0.50/1.00, M2, M3, H1-only) loses as well. The
 > implementation is faithful to the specification — the *parameters* are the
 > problem. Read [`docs/backtest-report.md`](docs/backtest-report.md) before
@@ -243,7 +243,7 @@ with    the time-anchored fix: touch=5 confirm=4 arm=4
 * [`docs/ea-deployment.md`](docs/ea-deployment.md) — deployment runbook.
 * [`docs/backtest-report.md`](docs/backtest-report.md) — the long backtest over
   13.5 months of real data and its verdict: **the frozen specification has no
-  edge** (profit factor 0.900, expectancy −1.95 USC per position). Read it
+  edge** (profit factor 0.901, expectancy −1.94 USC per position). Read it
   before enabling live trading.
 * [`docs/validation-checklist.md`](docs/validation-checklist.md) — what was
   validated on a live account, and how.

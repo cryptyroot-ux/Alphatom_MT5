@@ -14,9 +14,9 @@
 negative.**
 
 Over the full sample the expert would have lost money on every variant that
-was tried: profit factors between **0.813 and 0.933**, expectancy between
-**−1.37 and −3.99 USC per closed position**, and a peak drawdown of up to
-**86 683 USC** — forty times the size of the 2 154 USC account it was run on.
+was tried: profit factors between **0.815 and 0.935**, expectancy between
+**−1.33 and −3.95 USC per closed position**, and a peak drawdown of up to
+**86 555 USC** — forty times the size of the 2 154 USC account it was run on.
 
 The first live run agrees with the backtest: two baskets, both stopped out,
 **−134.10 USC** in a single evening.
@@ -98,53 +98,53 @@ opposite basket.
 
 | Metric | Value |
 |--------|-------|
-| POI touches | 11 293 |
-| Confirmations | 9 166 |
-| Armed baskets | 8 236 |
-| Closed positions | **21 015** |
-| Wins / losses | 8 749 / 12 266 (win rate **41.6 %**) |
-| Gross profit / gross loss | 368 025 / 408 964 USC |
-| **Net** | **−40 939 USC** (−27 292 pips) |
-| **Profit factor** | **0.900** |
-| **Expectancy** | **−1.95 USC per position** |
-| Average win / average loss | 42.06 / 33.34 USC |
+| POI touches | 11 230 |
+| Confirmations | 9 089 |
+| Armed baskets | 8 251 |
+| Closed positions | **21 037** |
+| Wins / losses | 8 792 / 12 245 (win rate **41.8 %**) |
+| Gross profit / gross loss | 370 515 / 411 287 USC |
+| **Net** | **−40 772 USC** (−27 182 pips) |
+| **Profit factor** | **0.901** |
+| **Expectancy** | **−1.94 USC per position** |
+| Average win / average loss | 42.14 / 33.59 USC |
 | Largest win / largest loss | 150.00 / 77.55 USC |
-| **Max drawdown** | **45 711 USC** |
+| **Max drawdown** | **46 086 USC** |
 | Average holding time | 11 bars |
-| TP1 hits | 3 622 |
-| Setups cancelled, POI gone | 636 |
+| TP1 hits | 3 642 |
+| Setups cancelled, POI gone | 633 |
 
-With 21 015 positions the standard error of the expectancy is ≈ 0.26 USC,
-so the result is about **7.6 standard deviations below zero** — the loss is
+With 21 037 positions the standard error of the expectancy is ≈ 0.26 USC,
+so the result is about **7.5 standard deviations below zero** — the loss is
 not a sampling accident.
 
 ### 4.2 Variants
 
 | Variant | Positions | Win % | PF | Net (USC) | Max DD (USC) | Expectancy |
 |---------|-----------|-------|----|-----------|--------------|------------|
-| M1, spread 0.34, D-4 off (base) | 21 015 | 41.6 | 0.900 | −40 939 | 45 711 | −1.95 |
-| M1, D-4 **on** (current code) | 18 151 | 41.6 | 0.898 | −36 315 | 42 547 | −2.00 |
-| M1, spread 0.50 | 21 020 | 41.4 | 0.879 | −50 753 | 54 984 | −2.41 |
-| M1, spread 1.00 | 21 154 | 40.4 | 0.813 | −84 375 | 86 683 | −3.99 |
-| M2 execution | 11 448 | 47.2 | 0.878 | −29 208 | 29 931 | −2.55 |
-| M3 execution | 8 230 | 51.8 | 0.933 | −11 253 | 17 111 | −1.37 |
-| H1 POI only | 7 820 | 44.1 | 0.932 | −10 435 | 15 841 | −1.33 |
+| M1, spread 0.34, D-4 off (base) | 21 037 | 41.8 | 0.901 | −40 772 | 46 086 | −1.94 |
+| M1, D-4 **on** (current code) | 18 171 | 41.7 | 0.899 | −36 109 | 41 842 | −1.99 |
+| M1, spread 0.50 | 21 063 | 41.5 | 0.881 | −50 035 | 54 829 | −2.38 |
+| M1, spread 1.00 | 21 193 | 40.6 | 0.815 | −83 621 | 86 555 | −3.95 |
+| M2 execution | 11 454 | 47.2 | 0.875 | −30 062 | 30 785 | −2.62 |
+| M3 execution | 8 272 | 51.8 | 0.935 | −10 999 | 17 079 | −1.33 |
+| H1 POI only | 7 798 | 44.2 | 0.929 | −10 906 | 16 493 | −1.40 |
 
 **Every variant loses.** The spread is the biggest single lever: at a spread
 of 1.00 the strategy loses four times as much. The one-side rule (D-4)
-changes almost nothing (PF 0.898 vs 0.900) — it is not the problem.
+changes almost nothing (PF 0.899 vs 0.901) — it is not the problem.
 
 ### 4.3 Where the money is lost (base run)
 
 | Group | Positions | Win % | Net (USC) |
 |-------|-----------|-------|-----------|
-| BUY | 10 400 | 41.9 | −20 262 |
-| SELL | 10 615 | 41.4 | −20 677 |
-| POI M15 | 11 103 | 41.0 | −27 516 |
-| POI M30 | 5 509 | 42.3 | −4 610 |
-| POI H1 | 4 403 | 42.5 | −8 813 |
-| IFVG confirmation | 16 262 | 41.9 | −33 372 |
-| CISD confirmation | 4 753 | 40.8 | −7 566 |
+| BUY | 10 408 | 42.2 | −18 727 |
+| SELL | 10 629 | 41.4 | −22 046 |
+| POI M15 | 11 084 | 41.1 | −26 861 |
+| POI M30 | 5 534 | 42.6 | −4 289 |
+| POI H1 | 4 419 | 42.5 | −9 622 |
+| IFVG confirmation | 16 186 | 42.1 | −32 201 |
+| CISD confirmation | 4 851 | 40.8 | −8 571 |
 
 No subgroup is profitable. The M15 POIs and the IFVG confirmation are the
 worst, but the whole curve sits below 1.0.
@@ -185,15 +185,15 @@ is invalid: the dead period silently removed trades from the sample.
 The mechanics are internally consistent — the expert implements the frozen
 specification faithfully, which the test suite verifies — but the geometry of
 the specification leaves no edge. Every number below is measured by the
-harness on the base run (M1, spread 0.34, D-4 off, 21 015 positions).
+harness on the base run (M1, spread 0.34, D-4 off, 21 037 positions).
 
 ### 6.1 The shared stop is *not* mostly the 50-pip cap
 
 | Measurement | Value | Spec reference |
 |---|---|---|
-| Average distance E1 → shared SL | **33.7 pips** | spec §7 / D-1: structural SL (extreme wick of the touch chain ± 2 ticks) |
-| Setups where the 50-pip cap actually bound | **2 098 of 8 236 (25 %)** | spec §7: the cap is a clamp, not a skip |
-| Average loss per closed position | **33.34 USC ≈ 22.2 pips** | 1.50 USC per pip per layer |
+| Average distance E1 → shared SL | **33.9 pips** | spec §7 / D-1: structural SL (extreme wick of the touch chain ± 2 ticks) |
+| Setups where the 50-pip cap actually bound | **2 114 of 8 251 (26 %)** | spec §7: the cap is a clamp, not a skip |
+| Average loss per closed position | **33.59 USC ≈ 22.4 pips** | 1.50 USC per pip per layer |
 
 The 22-pip average loss is *not* the stop distance. Three effects shorten it:
 
@@ -212,38 +212,38 @@ the 50-pip cap is a genuine but minority clamp.
 
 | Exit | Count | Average | Note |
 |------|-------|---------|------|
-| Target reached (TP1/TP2/TP3) | **5 175** | **60.76 USC ≈ 40.5 pips** | spec §6: +30 / +50 / +100 pips from each own fill |
-| Closed by the +10-pip SL+ lock (a win) | **3 574** | **15.00 USC = 10.0 pips** | spec §9 / line 47: after TP1 the E2/E3 stop is locked at +10 pips |
-| Closed by a real stop (a loss) | 12 266 | 33.34 USC ≈ 22.2 pips | |
-| **Total** | **21 015** | **42.06 USC ≈ 28.1 pips per winner** | |
+| Target reached (TP1/TP2/TP3) | **5 207** | **60.83 USC ≈ 40.6 pips** | spec §6: +30 / +50 / +100 pips from each own fill |
+| Closed by the +10-pip SL+ lock (a win) | **3 585** | **15.00 USC = 10.0 pips** | spec §9 / line 47: after TP1 the E2/E3 stop is locked at +10 pips |
+| Closed by a real stop (a loss) | 12 245 | 33.59 USC ≈ 22.4 pips | |
+| **Total** | **21 037** | **42.14 USC ≈ 28.1 pips per winner** | |
 
 The TP1 lock does not truncate the target wins — it converts a *running*
-winner into a +10-pip win: 3 574 of the 8 749 winners (41 %) are E2/E3
+winner into a +10-pip win: 3 585 of the 8 792 winners (41 %) are E2/E3
 positions that were stopped at the locked stop after E1 had already hit its
 target. That is exactly what the specification asks for, and it is what
-pulls the average winner down from 40.5 pips (the target winners) to 28.1
+pulls the average winner down from 40.6 pips (the target winners) to 28.1
 pips (all winners).
 
 ### 6.3 The break-even arithmetic
 
 | Quantity | Value |
 |----------|-------|
-| Win rate | 41.6 % |
-| Required average win / average loss for break-even | `(1 − 0.416) / 0.416` = **1.404×** |
-| Delivered average win / average loss | `42.06 / 33.34` = **1.262×** |
-| Gap | **−10 % relative** → expectancy **−1.95 USC per position** |
+| Win rate | 41.8 % |
+| Required average win / average loss for break-even | `(1 − 0.418) / 0.418` = **1.392×** |
+| Delivered average win / average loss | `42.14 / 33.59` = **1.255×** |
+| Gap | **−10 % relative** → expectancy **−1.94 USC per position** |
 
-The strategy needs a 1.40× payoff and delivers 1.26×. At 21 015 positions the
-standard error of the expectancy is ≈ 0.26 USC, so the shortfall is ≈ 7.6
+The strategy needs a 1.39× payoff and delivers 1.25×. At 21 037 positions the
+standard error of the expectancy is ≈ 0.26 USC, so the shortfall is ≈ 7.5
 standard deviations — the loss is structural, not noise.
 
 ### 6.4 Costs remove the remainder
 
 | Spread | Positions | PF | Net (USC) | Expectancy |
 |--------|-----------|----|-----------|------------|
-| 0.34 (measured) | 21 015 | 0.900 | −40 939 | −1.95 |
-| 0.50 (stress) | 21 020 | 0.879 | −50 753 | −2.41 |
-| 1.00 (stress) | 21 154 | 0.813 | −84 375 | −3.99 |
+| 0.34 (measured) | 21 037 | 0.901 | −40 772 | −1.94 |
+| 0.50 (stress) | 21 063 | 0.881 | −50 035 | −2.38 |
+| 1.00 (stress) | 21 193 | 0.815 | −83 621 | −3.95 |
 
 The spread is charged twice — on the market fills of the marketable layers
 and on the round trip of every position — so it is the single largest lever.
@@ -251,11 +251,11 @@ At a spread of 1.00 the strategy loses more than twice as much.
 
 ### 6.5 Frequency and drawdown
 
-21 015 positions over 399 999 M1 bars (413 calendar days) is **one position
-every 19 bars** and 8 236 armed baskets is **one basket every 49 bars** —
+21 037 positions over 399 999 M1 bars (413 calendar days) is **one position
+every 19 bars** and 8 251 armed baskets is **one basket every 48 bars** —
 about 51 positions and 20 baskets per calendar day. A near-coin-flip payoff
 traded several times a day is the profile that produces a large drawdown for
-a small expected loss: the peak-to-trough drawdown is **45 711 USC**, more
+a small expected loss: the peak-to-trough drawdown is **46 086 USC**, more
 than twenty times the 2 154 USC balance of the account it was run on.
 
 ### 6.6 The retest step: measured
@@ -271,10 +271,10 @@ the distance the market still had to travel to reach E1.
 | Average latency, confirmation → retest | **10.3 bars** | **5.2 bars** |
 | Median latency | 1 bar | 1 bar |
 | Longest latency | 3 286 bars (≈ 2.3 days) | 3 119 bars |
-| Retested within 1 bar | 5 429 (66 %) | 4 936 (70 %) |
-| Retested within 15 bars | 7 576 (92 %) | 6 802 (96 %) |
-| Longer than 15 bars | 660 (8 %) | 305 (4 %) |
-| Average distance still to travel to E1 | **8.1 pips** | **7.6 pips** |
+| Retested within 1 bar | 5 456 (66 %) | 4 963 (70 %) |
+| Retested within 15 bars | 7 594 (92 %) | 6 821 (96 %) |
+| Longer than 15 bars | 657 (8 %) | 305 (4 %) |
+| Average distance still to travel to E1 | **8.0 pips** | **7.5 pips** |
 
 **Reading.** The retest is not a filter that rarely fires: two thirds of the
 confirmations are armed on the very next bar, and the market typically has to
@@ -294,14 +294,14 @@ The specification is coherent and the implementation matches it; the
 *parameters* do not produce an edge. Three concrete numbers explain the
 result:
 
-* the shared structural stop is **33.7 pips** from E1 on average, so a
-  winner has to clear a ~22-pip average loss, and the 41.6 % win rate only
-  pays 1.26× where 1.40× is needed;
+* the shared structural stop is **33.9 pips** from E1 on average, so a
+  winner has to clear a ~22-pip average loss, and the 41.8 % win rate only
+  pays 1.25× where 1.39× is needed;
 * the TP1 lock turns 41 % of the winners into +10-pip wins, which is what
   keeps the average winner at 28 pips instead of the 40 pips the target
   winners actually deliver;
-* the frequency (one position every 19 bars) turns a −1.95 USC expectancy
-  into a −40 939 USC total and a 45 711 USC drawdown.
+* the frequency (one position every 19 bars) turns a −1.94 USC expectancy
+  into a −40 772 USC total and a 46 086 USC drawdown.
 
 ## 7. A second live bug: the expert died on every terminal restart
 
@@ -357,7 +357,7 @@ These are *hypotheses to test with the harness*, not recommendations to trade:
    50-pip cap, which suggests the cap almost never binds. A deliberate,
    fixed stop distance would make the geometry predictable.
 4. **One side at a time (D-4) stays** — it is neutral in the backtest
-   (PF 0.898 vs 0.900) and it removes the double-exposure whipsaw that cost
+   (PF 0.899 vs 0.901) and it removes the double-exposure whipsaw that cost
    134 USC on the first live evening.
 5. **Daily loss cap** is still missing; with a negative expectancy it would
    not have saved the account, but it bounds the damage.

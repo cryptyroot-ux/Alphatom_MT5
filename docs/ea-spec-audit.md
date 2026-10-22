@@ -115,13 +115,13 @@ Priority among M1/M2/M3 (F-6 proposes a mechanical default) · money-risk cap pe
 | money-risk cap per setup | **decided**: 440 USC (`InpRiskCapMoney`); the per-day cumulative cap is still open |
 | priority among M1/M2/M3 | mechanical default in force (earliest valid confirmation wins per direction) |
 | order type, buffer, zone width, retest tolerance | decided by the owner and frozen in the spec |
-| handling of partial fills, gaps, extreme spread, news, sessions | **still open** — the backtest shows the spread alone moves the expectancy from −1.95 to −3.99 USC |
+| handling of partial fills, gaps, extreme spread, news, sessions | **still open** — the backtest shows the spread alone moves the expectancy from −1.94 to −3.95 USC |
 | TP "touch" vs actual fill | targets are native broker orders; the backtest charges the spread on the round trip |
 
 **The backtest verdict:** the frozen specification has **no edge**. Over 13.5
-months of real HFM data the expert would have traded 21 015 positions with a
-41.6 % win rate, a profit factor of 0.900 and an expectancy of −1.95 USC per
-position (≈ 7.6 standard deviations below zero). Every variant tried is
+months of real HFM data the expert would have traded 21 037 positions with a
+41.8 % win rate, a profit factor of 0.901 and an expectancy of −1.94 USC per
+position (≈ 7.5 standard deviations below zero). Every variant tried is
 negative as well. The implementation is faithful; the parameters are the
 problem.
 
@@ -130,9 +130,9 @@ problem.
 - **D-1 (F-7, S1):** **RESOLVED — extend the anchor window to the arming moment over all candles.** The structural SL is the extreme wick of every candle from the first POI touch to the arming bar (± 2 ticks); after the 50-pip clamp the SL must still sit beyond the far entry E3, otherwise the setup is skipped with a log line (no invalid stop is ever sent). Recorded as round-4 rule D-1 in `docs/ea-execution-spec.md`.
 - **D-2 (F-5, S2):** **RESOLVED — same-colour delivery run with a minimum of 2 candles** (`CISDMinRun` default 2, exposed as an input; 326 CISD bars/day on HFM M1 versus 689 at the frozen N=0). A doji breaks the run. Recorded as round-4 rule D-2.
 - **D-3 (F-9, S2):** **RESOLVED — yes, a POI role flip cancels the open setup** (unfilled layers removed, filled layers keep their own SL/TP as on the Broken path). Recorded as round-4 rule D-3.
-- **D-4 (owner, 2026-10-21):** **RESOLVED — only one direction may hold the market at a time.** While a side has live orders resting or exposure, the opposite side's setup is cancelled (reason `OPPOSITE`) and its resting orders are deleted; a setup that already carries exposure is never cancelled this way. Motivation: the first live run opened a SELL basket at 17:48 and a BUY basket at 17:51 on the same whipsaw and both were stopped out (−134.10 USC). The long backtest shows the rule is neutral for the expectancy (PF 0.898 with, 0.900 without), so it is kept for the exposure protection, not for the P&L.
+- **D-4 (owner, 2026-10-21):** **RESOLVED — only one direction may hold the market at a time.** While a side has live orders resting or exposure, the opposite side's setup is cancelled (reason `OPPOSITE`) and its resting orders are deleted; a setup that already carries exposure is never cancelled this way. Motivation: the first live run opened a SELL basket at 17:48 and a BUY basket at 17:51 on the same whipsaw and both were stopped out (−134.10 USC). The long backtest shows the rule is neutral for the expectancy (PF 0.899 with, 0.901 without), so it is kept for the exposure protection, not for the P&L.
 - **D-5 (backtest finding, 2026-10-21):** **RESOLVED — a POI level that leaves the map cancels the setup that had no exposure** (reason `POI_GONE`, resting GTC orders deleted). The POI map keeps only the newest levels per timeframe; without this rule a basket that never fills keeps its setup and its orders alive for ever and blocks that direction. A setup with exposure keeps running so the money is still managed. Recorded in the execution spec and covered by two kernel test groups.
-- **D-6 (backtest verdict, 2026-10-21):** **the frozen specification has no edge** — 21 015 positions over 13.5 months of real HFM data, 41.6 % win rate, profit factor 0.900, expectancy −1.95 USC per position (≈ 7.6 standard deviations below zero); every variant (spread 0.50/1.00, M2, M3, H1-only, D-4 on) is negative as well. The implementation is faithful, the parameters are the problem. Full analysis and the harness that reproduces it: `docs/backtest-report.md`.
+- **D-6 (backtest verdict, 2026-10-21):** **the frozen specification has no edge** — 21 037 positions over 13.5 months of real HFM data, 41.8 % win rate, profit factor 0.901, expectancy −1.94 USC per position (≈ 7.5 standard deviations below zero); every variant (spread 0.50/1.00, M2, M3, H1-only, D-4 on) is negative as well. The implementation is faithful, the parameters are the problem. Full analysis and the harness that reproduces it: `docs/backtest-report.md`.
 - **D-8 (live finding, 2026-10-22):** **the one-side gate must ask about the opposite side.** `EaSideHoldsMarket(isBuy)` is called with `!isBuy` at both call sites, so the body has to map `isBuy` to the **buy** setup and the fall-through to the **sell** setup. The body was inverted (`isBuy` → the sell setup), so every check asked the arming side about **itself**: a basket that had just been armed was immediately cancelled with reason `OPPOSITE` before a single order went out, and the D-4 whipsaw protection was never actually applied either. Live evidence: every `ARM` in the journal is followed by `CANCEL reason=OPPOSITE(9)` and there is not one `ORDER_PLACED` / `ORDER_MARKET` line in the whole log — the expert has not traded since D-4 was introduced. This also explains the earlier live run (6 positions, −134.10 USC), which happened *before* D-4 existed. Fix: the body now matches the parameter, with two contract tests (*the one-side gate asks about the other side*, *the arm path is not blocked by its own setup*). Commit `d5a1c1e`.
 - **D-9 (audit finding, 2026-10-22):** **the state file name carries the symbol and the magic** (`MQL5/Files/Alphatom_state_<symbol>_<magic>.csv`). The frozen spec names the base name `Alphatom_state.csv`; the file name is an implementation detail of the restart recovery, not a strategy rule, and a fixed name lets two instances of the expert (two symbols, or the same symbol twice) overwrite each other's state and restore a setup whose price levels belong to another chart. The spec text is left untouched; the divergence is recorded here. The same audit round also closed: the zero-range bar filter of spec F-11 (a bar without a range may not start, confirm or retest anything — kernel groups *a zero-range bar cannot start a setup* / *cannot invert a gap* / *cannot retest*), the gap-detection tolerance of the IFVG detector (it now uses the same `InpGapToleranceTicks` as the POI map, so the chart and the expert invert the same gaps), the rebuild of the expert config from the live symbol on every bar, and the `DONE_PARTIAL` handling.
 - **D-7 (live finding, 2026-10-22):** **the expert must wait for the broker connection instead of refusing the start-up.** The terminal initialises an expert while the connection is still being established, so the symbol specification and the account margin mode are unknown at that moment. `OnInit` used to return `INIT_FAILED` in that case, and MT5 removes an expert whose `OnInit` fails **without ever re-attaching it** — after every terminal restart the whole strategy stopped silently. Observed live: the terminal restarted at 08:07, the journal showed `initializing of Alphatom_EA (XAUUSDc,H1) failed with code 1` followed by `expert Alphatom_EA (XAUUSDc,H1) removed`, and the state file stopped being written from 08:05. The setup that was waiting for its retest was then lost, because its H1 POI level aged out of the map (`POI_GONE`). Resolution: `OnInit` now waits (`INIT_SUCCEEDED` + a 5-second timer), the symbol/account state is re-checked from `OnTick` and `OnTimer`, and the restart recovery only runs once the terminal is in sync (the recovery compares the state file with the broker's positions and resting orders, which are only known after the sync). A permanently wrong account type (a non-hedging account) still refuses the start-up. Evidence: commit `2d7b05a`, contract tests *init does not die when the broker is not connected yet* / *recovery runs only after the broker state is known*, and the live journal of 2026-10-22 09:15 (`ALPHA A ready: the terminal is synchronized with the broker` → `recovery: 1 setup(s) restored` → `init: shadow=false`).
@@ -177,7 +177,7 @@ covered by a test. **Open** means the rule is deliberately not implemented yet
 | 28 | Scope divergence: the EA uses the MSNR replica, not the TradingView POI map | documented | spec D-4 (scope divergence) |
 | 29 | Daily cumulative loss cap (per day) | **open** | guide §13; not implemented |
 | 30 | Partial-fill policy, gap/slippage on exits | **open** | guide §13; not implemented |
-| 31 | Extreme-spread filter | **open** | guide §13; the backtest shows the spread is the largest single lever (PF 0.900 → 0.813) |
+| 31 | Extreme-spread filter | **open** | guide §13; the backtest shows the spread is the largest single lever (PF 0.901 → 0.815) |
 | 32 | News filter, session filter | **open** | guide §13; not implemented |
 | 33 | TP "touch" vs actual fill semantics | **open** | the targets are native broker orders, so the broker decides; not modelled beyond that |
 
@@ -188,8 +188,22 @@ invented, plus the daily loss cap.
 
 **Conformance is not profitability.** The long backtest
 (`docs/backtest-report.md`) shows that the frozen rules are implemented
-faithfully and still lose money: profit factor 0.900 over 21 015 positions on
+faithfully and still lose money: profit factor 0.901 over 21 037 positions on
 real HFM data.
+
+## 5c. Known open deviations from the frozen spec (audit 2026-10-22)
+
+An independent audit of the expert against the frozen specification found the
+following deviations that are **not yet closed**. They are listed here so the
+repository never claims more than it delivers.
+
+| # | Spec rule | What the code does | Consequence | Status |
+|---|-----------|--------------------|-------------|--------|
+| A-1 | **F-6 — all three execution timeframes (M1/M2/M3) are monitored**; the earliest valid confirmation per direction defines the confirmation zone | the expert monitors **one** execution timeframe, chosen by `InpExecTimeframe` (the live instance uses M1) | a setup whose confirmation exists only on M2 or M3 is never detected, so the expert misses valid trades | **open** — needs three bar series and three anchors per direction |
+| A-2 | **F-10 — the layer prices are rounded to the tick grid and must stay inside the entry zone**; if the rounding pushes a layer out of the zone the setup is skipped | the zone of a CISD is built from the raw band, so an off-grid zone width (an odd multiple of the tick size) can skip a setup for a purely cosmetic reason | a setup is skipped although its geometry is valid | **open** — the default zone widths (0.20 / 2.00) are on the grid, so the default configuration is unaffected |
+| A-3 | **Restart recovery — a missing or unreadable state file refuses the live start** (spec, line 68) | implemented as specified | with real money open, a lost state file parks the expert in shadow and the position is no longer managed | **by design (spec)** — the operator resets the state file with the terminal stopped, see `docs/ea-deployment.md` §5.0 |
+| A-4 | **The shared-SL window starts at the first POI touch bar** (D-1) | the window starts at the bar on which the expert started the setup | the expert checks every closed bar, so the setup starts on the first bar whose wick touches the POI — the two readings only differ when a level was touched earlier while it was not eligible | **interpretation recorded** — the reading used is the setup's own touch chain |
+| A-5 | **F-8 — the basket risk uses the live contract specification** | `SYMBOL_TRADE_TICK_VALUE_LOSS` and `SYMBOL_TRADE_TICK_VALUE` are **0** on this account, so the money-per-pip falls back to `contract × 10.0` USC/pip/lot | the money cap compares against a published-web constant, not a measured tick value | **open** — the fallback is documented in `docs/ea-deployment.md` §4 |
 
 ## 6. Evidence artifacts
 
