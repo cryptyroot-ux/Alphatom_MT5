@@ -223,3 +223,51 @@ class RuntimeCheckContractTests(unittest.TestCase):
         self.assertIn("Alphatom_runtime_report.csv", self.source)
         self.assertIn("FileOpen", self.source)
         self.assertIn("money_per_pip_per_lot", self.source)
+
+
+class DiagnosticToolContractTests(unittest.TestCase):
+    """The published diagnostic tools must stay read-only.
+
+    They are handed to users who want to inspect their own broker before
+    running the expert, so none of them may be able to touch the account.
+    """
+
+    TOOLS = (
+        "AlphatomHistoryDepth.mq5",
+        "Alphatom_ExecKernelCheck.mq5",
+    )
+
+    def setUp(self):
+        self.sources = {}
+        for name in self.TOOLS:
+            path = ROOT / "MQL5" / "Experts" / name
+            self.assertTrue(path.is_file(), f"{name} is missing")
+            self.sources[name] = path.read_text(encoding="utf-8")
+
+    def test_no_tool_can_send_an_order(self):
+        for name, source in self.sources.items():
+            for call in ("OrderSend", "OrderModify", "OrderDelete",
+                         "OrderClose", "PositionClose", "CTrade", "COrder"):
+                self.assertNotIn(call, source, f"{name} must not call {call}")
+
+    def test_no_tool_hardcodes_an_account_or_a_path(self):
+        for name, source in self.sources.items():
+            for secret in ("InpLogin", "InpPassword", "InpAccount",
+                           "/root/", "C:\\", "api_key", "token"):
+                self.assertNotIn(secret, source, f"{name} must stay portable")
+
+    def test_the_history_probe_only_reads_bars(self):
+        source = self.sources["AlphatomHistoryDepth.mq5"]
+        self.assertIn("CopyRates", source)
+        self.assertIn("InpDays", source)
+        for tf in ("PERIOD_M1", "PERIOD_M15", "PERIOD_H1"):
+            self.assertIn(tf, source)
+
+    def test_the_kernel_check_only_type_checks_the_kernel(self):
+        source = self.sources["Alphatom_ExecKernelCheck.mq5"]
+        self.assertIn("#include <Alphatom/ExecKernel.mqh>", source)
+        self.assertIn("Exec_Advance", source)
+        self.assertIn("Exec_RecordFill", source)
+        self.assertIn("Exec_RecordClose", source)
+        # It must not read the market: it exists to type-check the kernel.
+        self.assertNotIn("CopyRates", source)
