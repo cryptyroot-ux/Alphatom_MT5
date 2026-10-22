@@ -38,6 +38,7 @@ input int    InpTp2Pips           = 50;     // Layer 2 target (pips)
 input int    InpTp3Pips           = 100;    // Layer 3 target (pips)
 input int    InpSlPlusPips        = 10;     // Post-TP1 stop lock (pips)
 input double InpRiskCapMoney      = 440.0;   // Basket risk cap (deposit currency, 0=off)
+input double InpMoneyPerPipOverride = 0.0;   // Money per pip per lot override (0=auto)
 
 //--- POI map inputs: must match the chart indicator
 input int    InpSwingLeft          = 3;
@@ -291,12 +292,20 @@ double EaMoneyPerPipPerLot()
    const double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
    const double tickValueAny = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    const double contract = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   const double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double tv = 0.0;
    if(tickValue > 0.0)            tv = tickValue;          // preferred: per-tick loss value
    else if(tickValueAny > 0.0)    tv = tickValueAny;       // generic tick value
+   // Try to compute from point value if tick value unavailable
+   if(tv <= 0.0 && point > 0.0 && contract > 0.0)
+      tv = contract * point;                                // 1 point = contract * point value
    if(tickSize > 0.0 && tv > 0.0)
       return tv * (EXEC_PIP_SIZE / tickSize);              // from live spec
-   if(contract > 0.0)             return contract * 10.0;  // fallback: 1 oz × $0.10/pip = 10 USC/pip/lot
+   // Allow user override via input (0 = auto)
+   if(InpMoneyPerPipOverride > 0.0)
+      return InpMoneyPerPipOverride;
+   // Final fallback: standard cent account 1 oz = 10 USC/pip/lot
+   if(contract > 0.0)             return contract * 10.0;
    return 0.0;
   }
 
@@ -555,7 +564,7 @@ bool EaTryStartSetup(const bool isBuy, ExecSetup &setup, EaLink &link)
       return false;
 
    if(!Exec_InitSetup(setup, isBuy, bestRole, lower, upper,
-                      EaTfMinutes(bestTf)))
+                      EaTfMinutes(bestTf), 1))
       return false;
 
    ExecEvent ev;
