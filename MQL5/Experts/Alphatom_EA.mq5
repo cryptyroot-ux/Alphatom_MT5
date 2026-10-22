@@ -80,14 +80,30 @@ int       g_countH1 = 0;
 datetime  g_poiBarOpen[3] = {0, 0, 0};
 bool      g_poiReady[3] = {false, false, false};
 
-MSNRBar  g_execBars[];
-int      g_execCount = 0;
-datetime g_lastExecOpen = 0;
+// Execution bars for each execution timeframe (M1, M2, M3)
+MSNRBar  g_execBarsM1[];
+MSNRBar  g_execBarsM2[];
+MSNRBar  g_execBarsM3[];
+int       g_execCountM1 = 0;
+int       g_execCountM2 = 0;
+int       g_execCountM3 = 0;
+datetime  g_lastExecOpenM1 = 0;
+datetime  g_lastExecOpenM2 = 0;
+datetime  g_lastExecOpenM3 = 0;
 
-ExecSetup g_buySetup;
-ExecSetup g_sellSetup;
-EaLink    g_buyLink;
-EaLink    g_sellLink;
+// Three setups per direction (one per execution timeframe)
+ExecSetup g_buySetupM1;
+ExecSetup g_buySetupM2;
+ExecSetup g_buySetupM3;
+ExecSetup g_sellSetupM1;
+ExecSetup g_sellSetupM2;
+ExecSetup g_sellSetupM3;
+EaLink    g_buyLinkM1;
+EaLink    g_buyLinkM2;
+EaLink    g_buyLinkM3;
+EaLink    g_sellLinkM1;
+EaLink    g_sellLinkM2;
+EaLink    g_sellLinkM3;
 ExecConfig g_cfg;
 
 bool g_liveAllowed = false;
@@ -438,28 +454,92 @@ void EaRefreshAllPoi()
 //+------------------------------------------------------------------+
 //| Execution bars (closed only)                                     |
 //+------------------------------------------------------------------+
-bool EaCopyExecBars()
-  {
-   MqlRates rates[];
-   ArraySetAsSeries(rates, false);
-   const int copied = CopyRates(_Symbol, InpExecTimeframe, 0,
-                                InpExecHistoryBars, rates);
-   if(copied <= 1)
-      return false;
-   const int closed = copied - 1;
-   if(ArrayResize(g_execBars, closed) != closed)
-      return false;
-   for(int i = 0; i < closed; ++i)
-     {
-      g_execBars[i].open = rates[i].open;
-      g_execBars[i].high = rates[i].high;
-      g_execBars[i].low = rates[i].low;
-      g_execBars[i].close = rates[i].close;
-      g_execBars[i].time = (long)rates[i].time;
-     }
-   g_execCount = closed;
-   return true;
+bool EaCopyExecBarsTf(const int execTf)
+{
+   if(execTf == 1)
+   {
+      const ENUM_TIMEFRAMES tf = PERIOD_M1;
+      MqlRates rates[];
+      ArraySetAsSeries(rates, false);
+      const int copied = CopyRates(_Symbol, tf, 0, InpExecHistoryBars, rates);
+      if(copied <= 1)
+         return false;
+      const int closed = copied - 1;
+      if(ArrayResize(g_execBarsM1, closed) != closed)
+         return false;
+      for(int i = 0; i < closed; ++i)
+      {
+         g_execBarsM1[i].open = rates[i].open;
+         g_execBarsM1[i].high = rates[i].high;
+         g_execBarsM1[i].low = rates[i].low;
+         g_execBarsM1[i].close = rates[i].close;
+         g_execBarsM1[i].time = (long)rates[i].time;
+      }
+      g_execCountM1 = closed;
+      return true;
+   }
+   else if(execTf == 2)
+   {
+      const ENUM_TIMEFRAMES tf = PERIOD_M2;
+      MqlRates rates[];
+      ArraySetAsSeries(rates, false);
+      const int copied = CopyRates(_Symbol, tf, 0, InpExecHistoryBars, rates);
+      if(copied <= 1)
+         return false;
+      const int closed = copied - 1;
+      if(ArrayResize(g_execBarsM2, closed) != closed)
+         return false;
+      for(int i = 0; i < closed; ++i)
+      {
+         g_execBarsM2[i].open = rates[i].open;
+         g_execBarsM2[i].high = rates[i].high;
+         g_execBarsM2[i].low = rates[i].low;
+         g_execBarsM2[i].close = rates[i].close;
+         g_execBarsM2[i].time = (long)rates[i].time;
+      }
+      g_execCountM2 = closed;
+      return true;
+   }
+   else
+   {
+      const ENUM_TIMEFRAMES tf = PERIOD_M3;
+      MqlRates rates[];
+      ArraySetAsSeries(rates, false);
+      const int copied = CopyRates(_Symbol, tf, 0, InpExecHistoryBars, rates);
+      if(copied <= 1)
+         return false;
+      const int closed = copied - 1;
+      if(ArrayResize(g_execBarsM3, closed) != closed)
+         return false;
+      for(int i = 0; i < closed; ++i)
+      {
+         g_execBarsM3[i].open = rates[i].open;
+         g_execBarsM3[i].high = rates[i].high;
+         g_execBarsM3[i].low = rates[i].low;
+         g_execBarsM3[i].close = rates[i].close;
+         g_execBarsM3[i].time = (long)rates[i].time;
+      }
+      g_execCountM3 = closed;
+      return true;
+   }
   }
+
+bool EaCopyExecBars()
+{
+   if(!EaCopyExecBarsTf(1))
+      return false;
+   if(g_execCountM1 % 2 == 0)
+     {
+      if(!EaCopyExecBarsTf(2))
+         return false;
+     }
+   if(g_execCountM1 % 3 == 0)
+     {
+      if(!EaCopyExecBarsTf(3))
+         return false;
+     }
+   return true;
+}
 
 //+------------------------------------------------------------------+
 //| Logging                                                          |
@@ -1596,6 +1676,220 @@ bool EaOnClosedBar()
       EaLogHeartbeat();
    return true;
   }
+
+
+
+
+// Resolve confirmation conflicts: if multiple timeframes have confirmations
+// for the same direction, keep only the earliest one and cancel the rest.
+void EaResolveConfirmationConflicts()
+{
+   for(int dir = 0; dir < 2; ++dir)
+   {
+      bool isBuy = (dir == 0);
+      ExecSetup *setups[3];
+      EaLink *links[3];
+      if(isBuy)
+      {
+         setups[0] = &g_buySetupM1; setups[1] = &g_buySetupM2; setups[2] = &g_buySetupM3;
+         links[0] = &g_buyLinkM1; links[1] = &g_buyLinkM2; links[2] = &g_buyLinkM3;
+      }
+      else
+      {
+         setups[0] = &g_sellSetupM1; setups[1] = &g_sellSetupM2; setups[2] = &g_sellSetupM3;
+         links[0] = &g_sellLinkM1; links[1] = &g_sellLinkM2; links[2] = &g_sellLinkM3;
+      }
+      
+      long earliestTime = 0;
+      int earliestIdx = -1;
+      for(int i = 0; i < 3; ++i)
+      {
+         if(setups[i]->phase >= EXEC_CONFIRMED && setups[i]->confirmTime > 0)
+         {
+            if(earliestTime == 0 || setups[i]->confirmTime < earliestTime)
+            {
+               earliestTime = setups[i]->confirmTime;
+               earliestIdx = i;
+            }
+         }
+      }
+      
+      for(int i = 0; i < 3; ++i)
+      {
+         if(i != earliestIdx && setups[i]->phase >= EXEC_CONFIRMED)
+         {
+            ExecEvent cancelEvent;
+            if(Exec_CancelForOpposite(*setups[i], cancelEvent))
+            {
+               EaLogEvent(dir == 0, *setups[i], cancelEvent);
+               EaHandleLiveEvent(dir == 0, *setups[i], cancelEvent);
+               EaClearLink(*links[i]);
+               EaWriteState();
+            }
+         }
+      }
+   }
+}
+
+void EaProcessDirectionTf(const bool isBuy, const int execTf, ExecSetup &setup, EaLink &link)
+{
+   if(EaSideHoldsMarket(!isBuy))
+   {
+      if(Exec_IsActive(setup))
+      {
+         ExecEvent cancelEvent;
+         if(Exec_CancelForOpposite(setup, cancelEvent))
+         {
+            EaLogEvent(isBuy, setup, cancelEvent);
+            EaHandleLiveEvent(isBuy, setup, cancelEvent);
+            EaClearLink(link);
+            EaWriteState();
+         }
+      }
+      return;
+   }
+
+   if(!Exec_IsActive(setup))
+   {
+      if(EaTryStartSetupTf(isBuy, setup, link))
+      {
+      }
+      return;
+   }
+
+   MSNRState state = link.lastState;
+   MSNRRole role = setup.poiRole;
+   MSNRLevel level;
+   const bool found = link.valid && EaFindLevel(link.tfIndex, link.created, level);
+   if(found)
+   {
+      state = level.state;
+      role = level.role;
+      link.lastState = state;
+   }
+   else if(link.valid)
+   {
+      ExecEvent missingEvent;
+      if(Exec_CancelForMissingPoi(setup, missingEvent))
+      {
+         EaLogEvent(isBuy, setup, missingEvent);
+         EaHandleLiveEvent(isBuy, setup, missingEvent);
+         EaClearLink(link);
+         EaWriteState();
+         return;
+      }
+   }
+
+   ExecEvent ev;
+   bool produced = false;
+   
+   if(execTf == 1)
+      produced = Exec_Advance(g_execBarsM1, g_execCountM1, state, role, g_cfg, setup, ev);
+   else if(execTf == 2)
+      produced = Exec_Advance(g_execBarsM2, g_execCountM2, state, role, g_cfg, setup, ev);
+   else
+      produced = Exec_Advance(g_execBarsM3, g_execCountM3, state, role, g_cfg, setup, ev);
+   
+   if(produced)
+   {
+      EaLogEvent(isBuy, setup, ev);
+      if(ev.type == EXEC_EVENT_ARM)
+         EaWriteState();
+      EaHandleLiveEvent(isBuy, setup, ev);
+   }
+   else if(InpLogEvents && setup.phase == EXEC_TOUCHED && g_execCountM1 > 0)
+   {
+      const long lastTime = g_execBarsM1[g_execCountM1 - 1].time;
+      const int barsSince = (int)((lastTime - setup.touchTime) / 60);
+      PrintFormat("ALPHA %s %s WAIT %s bars_since_touch=%d poi=[%.2f,%.2f] tf=M%d",
+                  InpInstanceTag, (isBuy ? "BUY" : "SELL"), EaPhaseName(setup.phase), barsSince, setup.poiLower,
+                  setup.poiUpper, setup.poiSourceMinutes);
+   }
+
+   if(ev.type == EXEC_EVENT_ARM)
+   {
+      if(EaHasEarlierConfirmation(isBuy, setup))
+      {
+         ExecEvent cancelEvent;
+         if(Exec_CancelForOpposite(setup, cancelEvent))
+         {
+            EaLogEvent(isBuy, setup, cancelEvent);
+            EaLiveCancelPendings(isBuy, setup);
+            EaClearLink(link);
+            EaWriteState();
+         }
+         return;
+      }
+      if(InpShadowMode || !g_liveAllowed)
+         EaShadowArmFills(isBuy, setup);
+      else
+         EaLivePlaceBasket(isBuy, setup);
+      return;
+   }
+
+   if(InpShadowMode || !g_liveAllowed)
+      EaSimulateBars(isBuy, setup);
+
+   if(!Exec_IsActive(setup))
+      EaClearLink(link);
+}
+
+bool EaTryStartSetupTf(const bool isBuy, ExecSetup &setup, EaLink &link)
+{
+   if(g_execCountM1 <= 0)
+      return false;
+   const MSNRBar bar = g_execBarsM1[g_execCountM1 - 1];
+
+   long      bestCreated = -1;
+   int       bestTf = -1;
+   MSNRRole  bestRole = MSNR_ROLE_SUPPORT;
+   MSNRState bestState = MSNR_STATE_FRESH;
+   double    lower = 0.0, upper = 0.0;
+
+   for(int tf = 0; tf < 3; ++tf)
+   {
+      for(int i = 0; i < EaPoiCount(tf); ++i)
+      {
+         MSNRLevel level;
+         if(!EaPoiLevelAt(tf, i, level))
+            continue;
+         if(level.state != MSNR_STATE_FRESH && level.state != MSNR_STATE_FLIPPED_FRESH)
+            continue;
+         if(isBuy != (level.role == MSNR_ROLE_SUPPORT))
+            continue;
+         if(!MSNR_TouchesZone(bar.low, bar.high, level.lower, level.upper, 0.0))
+            continue;
+         if(level.created <= bestCreated)
+            continue;
+         bestCreated = level.created; bestTf = tf; bestRole = level.role;
+         bestState = level.state; lower = level.lower; upper = level.upper;
+      }
+   }
+
+   if(bestTf < 0)
+      return false;
+
+   if(!Exec_InitSetup(setup, isBuy, bestRole, lower, upper, EaTfMinutes(bestTf), 1))
+      return false;
+
+   ExecEvent ev;
+   if(!Exec_Advance(g_execBarsM1, g_execCountM1, bestState, bestRole, g_cfg, setup, ev))
+   {
+      Exec_ClearSetup(setup);
+      return false;
+   }
+
+   link.valid = true;
+   link.created = bestCreated; link.tfIndex = bestTf; link.lastState = bestState;
+   EaLogEvent(isBuy, setup, ev);
+   return true;
+}
+
+bool EaHasEarlierConfirmation(const bool isBuy, const ExecSetup &setup)
+{
+   return false;
+}
+
 
 void EaLogRuntimeProbe()
   {

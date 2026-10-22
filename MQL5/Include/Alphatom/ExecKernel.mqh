@@ -272,6 +272,7 @@ bool Exec_BuildCisdEntryZone(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
                              const double anchorPrice,
                              const double minWidth,
                              const double maxWidth,
+                             const double tickSize,
                              MSNRZone &outZone)
   {
    outZone.valid = false;
@@ -281,7 +282,7 @@ bool Exec_BuildCisdEntryZone(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
 
    if(count != MSNR_ARRAY_SIZE(bars) || count <= 0 || anchorIndex < 0 ||
       anchorIndex >= count || anchorPrice <= 0.0 || minWidth < 0.0 ||
-      maxWidth <= 0.0 || minWidth > maxWidth)
+      maxWidth <= 0.0 || minWidth > maxWidth || tickSize <= 0.0)
       return false;
 
    const int first = anchorIndex > 0 ? anchorIndex - 1 : anchorIndex;
@@ -311,6 +312,15 @@ bool Exec_BuildCisdEntryZone(MSNR_ARRAY_PARAMETER(MSNRBar, bars),
       low = anchorPrice - maxWidth * 0.5;
       high = anchorPrice + maxWidth * 0.5;
      }
+
+   // Snap the zone bounds to the tick grid.
+   low  = Exec_RoundToTick(low, tickSize);
+   high = Exec_RoundToTick(high, tickSize);
+
+   // After snapping, verify the zone still meets the minimum width.
+   const double snappedWidth = high - low;
+   if(snappedWidth + 1e-9 < minWidth)
+      return false;
 
    outZone.valid = true;
    outZone.lower = low;
@@ -772,7 +782,8 @@ bool Exec_InitSetup(ExecSetup &setup,
                     const MSNRRole poiRole,
                     const double poiLower,
                     const double poiUpper,
-                    const int poiSourceMinutes)
+                    const int poiSourceMinutes,
+                    const int execTimeframe)
   {
    if(Exec_IsActive(setup))
       return false;
@@ -786,6 +797,7 @@ bool Exec_InitSetup(ExecSetup &setup,
    setup.poiLower = poiLower;
    setup.poiUpper = poiUpper;
    setup.poiSourceMinutes = poiSourceMinutes;
+   setup.execTimeframe = execTimeframe;
    return true;
   }
 
