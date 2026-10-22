@@ -822,27 +822,33 @@ void EaHandleLiveEvent(const bool isBuy, ExecSetup &setup,
 //+------------------------------------------------------------------+
 //| Direction step                                                   |
 //+------------------------------------------------------------------+
-// Does this side hold the market? Either it has live orders resting at the
-// broker (pending layers) or it carries exposure (filled layers). Owner
+// Does the BUY side hold the market? Either it has live orders resting at
+// the broker (pending layers) or it carries exposure (filled layers). Owner
 // decision 2026-10-21: only one side may hold the market at a time, so a
 // whipsaw can never open a basket on both sides.
+//
+// The parameter names the side that is asked about, and every call site asks
+// for the opposite side with !isBuy. The body must therefore map isBuy to
+// the buy setup: an inverted body makes an armed setup check ITSELF, and the
+// basket is then cancelled with reason OPPOSITE before a single order goes
+// out.
 bool EaSideHoldsMarket(const bool isBuy)
   {
    if(isBuy)
      {
-      if(g_sellSetup.phase != EXEC_ARMED && g_sellSetup.phase != EXEC_MANAGING)
+      if(g_buySetup.phase != EXEC_ARMED && g_buySetup.phase != EXEC_MANAGING)
          return false;
       for(int i = 0; i < 3; ++i)
-         if(g_sellSetup.layerState[i] == EXEC_LAYER_FILLED ||
-            g_sellSetup.layerState[i] == EXEC_LAYER_PENDING)
+         if(g_buySetup.layerState[i] == EXEC_LAYER_FILLED ||
+            g_buySetup.layerState[i] == EXEC_LAYER_PENDING)
             return true;
       return false;
      }
-   if(g_buySetup.phase != EXEC_ARMED && g_buySetup.phase != EXEC_MANAGING)
+   if(g_sellSetup.phase != EXEC_ARMED && g_sellSetup.phase != EXEC_MANAGING)
       return false;
    for(int i = 0; i < 3; ++i)
-      if(g_buySetup.layerState[i] == EXEC_LAYER_FILLED ||
-         g_buySetup.layerState[i] == EXEC_LAYER_PENDING)
+      if(g_sellSetup.layerState[i] == EXEC_LAYER_FILLED ||
+         g_sellSetup.layerState[i] == EXEC_LAYER_PENDING)
          return true;
    return false;
   }

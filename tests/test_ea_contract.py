@@ -131,6 +131,32 @@ class ExpertContractTests(unittest.TestCase):
         self.assertIn("EXEC_REASON_OPPOSITE", self.source)
         self.assertRegex(self.source, r"OPPOSITE")
 
+    def test_the_one_side_gate_asks_about_the_other_side(self):
+        # EaSideHoldsMarket(isBuy) must answer "does the BUY side hold the
+        # market?". Both call sites ask for the opposite side with !isBuy.
+        # An inverted body makes an armed setup check ITSELF: the arming
+        # basket is then cancelled with reason OPPOSITE before a single
+        # order is sent, and the expert never trades.
+        body = self.source[self.source.index("bool EaSideHoldsMarket("):]
+        body = body[: body.index("\n  }")]
+        start = body.index("if(isBuy)")
+        end = body.index("\n     }\n", start)
+        then_branch = body[start:end]
+        rest = body[end:]
+        self.assertIn("g_buySetup", then_branch)
+        self.assertNotIn("g_sellSetup", then_branch)
+        self.assertIn("g_sellSetup", rest)
+        self.assertNotIn("g_buySetup", rest)
+
+    def test_the_arm_path_is_not_blocked_by_its_own_setup(self):
+        # The arm-time guard asks whether the OPPOSITE side took the market
+        # between the check and the arming bar. Asking about the arming side
+        # itself would cancel every basket the moment it is armed.
+        arm = self.source[self.source.index("void EaHandleLiveEvent("):]
+        arm = arm[: arm.index("\n  }")]
+        self.assertIn("EaSideHoldsMarket(!isBuy)", arm)
+        self.assertIn("EaLivePlaceBasket", arm)
+
     def test_no_network_or_dll_calls(self):
         self.assertNotRegex(self.source, r"\b(WebRequest|DllCall|MessageBox)\b")
 
